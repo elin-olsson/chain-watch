@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="logo.png" alt="chain-watch logo" width="160">
-</p>
-
 <img src="banner.png" alt="chain-watch banner">
 
 # chain-watch
@@ -61,3 +57,9 @@ See `requirements.txt`. No runtime dependencies — stdlib only. Install `pytest
 pip install pytest
 python -m pytest tests/
 ```
+
+---
+
+<p align="center">
+  <img src="logo.png" alt="chain-watch logo" width="140">
+</p>
