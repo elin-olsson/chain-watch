@@ -2,8 +2,7 @@
   <img src="logo.png" alt="chain-watch logo" width="160">
 </p>
 
-<!-- Replace the line below with the real banner image once available -->
-<!-- <img src="banner.png" alt="chain-watch banner"> -->
+<img src="banner.png" alt="chain-watch banner">
 
 # chain-watch
 
