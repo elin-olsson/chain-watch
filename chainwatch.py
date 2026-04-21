@@ -514,8 +514,8 @@ def correlate_events(
     Detected chains
     ---------------
     brute_force       — ≥5 failed_login from the same IP within the time window
-    brute_then_success — brute_force cluster immediately followed by a successful_login
-    scan_then_auth    — ufw_block(s) from an IP preceding a login attempt from that IP
+    brute_then_login — brute_force cluster immediately followed by a successful_login
+    portscan_then_login    — ufw_block(s) from an IP preceding a login attempt from that IP
     lateral_movement  — successful_login followed by suspicious execve by the same user
 
     Returns a list of incident dicts sorted by start_time.
@@ -567,7 +567,7 @@ def correlate_events(
         if user := ev.get("user", ""):
             execve_by_user[user].append(ev)
 
-    # ── 1 & 2: brute_force / brute_then_success ──────────────────────────────
+    # ── 1 & 2: brute_force / brute_then_login ──────────────────────────────
     for ip, fails in fails_by_ip.items():
         i = 0
         while i < len(fails):
@@ -587,7 +587,7 @@ def correlate_events(
                 ]
                 if follow_successes:
                     incidents.append({
-                        "chain_type": "brute_then_success",
+                        "chain_type": "brute_then_login",
                         "source_ip": ip,
                         "events": cluster + follow_successes,
                         "start_time": t0,
@@ -607,7 +607,7 @@ def correlate_events(
             else:
                 i += 1
 
-    # ── 3: scan_then_auth ─────────────────────────────────────────────────────
+    # ── 3: portscan_then_login ─────────────────────────────────────────────────────
     for ip, blocks in blocks_by_ip.items():
         ip_auths = auth_attempts_by_ip.get(ip, [])
         if not ip_auths:
@@ -632,7 +632,7 @@ def correlate_events(
         used_blocks = [b for b in blocks if id(b) in paired_block_ids]
         all_events = sorted(used_blocks + qualifying_auths, key=lambda e: e["timestamp"])
         incidents.append({
-            "chain_type": "scan_then_auth",
+            "chain_type": "portscan_then_login",
             "source_ip": ip,
             "events": all_events,
             "start_time": all_events[0]["timestamp"],

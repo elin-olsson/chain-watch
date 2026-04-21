@@ -75,18 +75,18 @@ def test_brute_force_two_non_overlapping_clusters():
     assert all(inc["chain_type"] == "brute_force" for inc in incidents)
 
 
-# ── brute_then_success ────────────────────────────────────────────────────────
+# ── brute_then_login ────────────────────────────────────────────────────────
 
-def test_brute_then_success():
+def test_brute_then_login():
     auth = [fail("1.2.3.4", i * 10) for i in range(5)] + [ok("1.2.3.4", "alice", 200)]
     incidents = correlate_events(auth, [], [], window_seconds=600)
     assert len(incidents) == 1
-    assert incidents[0]["chain_type"] == "brute_then_success"
+    assert incidents[0]["chain_type"] == "brute_then_login"
     assert incidents[0]["severity"] == "critical"
     assert len(incidents[0]["events"]) == 6
 
 
-def test_brute_then_success_too_late():
+def test_brute_then_login_too_late():
     # Success arrives more than window after cluster end — plain brute_force
     auth = [fail("1.2.3.4", i * 10) for i in range(5)] + [ok("1.2.3.4", "alice", 1201)]
     incidents = correlate_events(auth, [], [], window_seconds=600)
@@ -94,7 +94,7 @@ def test_brute_then_success_too_late():
     assert incidents[0]["chain_type"] == "brute_force"
 
 
-def test_brute_then_success_different_ip_not_linked():
+def test_brute_then_login_different_ip_not_linked():
     auth = (
         [fail("1.2.3.4", i * 10) for i in range(5)] +
         [ok("5.6.7.8", "alice", 100)]   # success from a different IP
@@ -104,14 +104,14 @@ def test_brute_then_success_different_ip_not_linked():
     assert incidents[0]["chain_type"] == "brute_force"
 
 
-# ── scan_then_auth ────────────────────────────────────────────────────────────
+# ── portscan_then_login ────────────────────────────────────────────────────────────
 
-def test_scan_then_auth_detected():
+def test_portscan_then_login_detected():
     ufw = [block("1.2.3.4", p, s) for p, s in ((22, 0), (80, 30), (443, 60))]
     auth = [fail("1.2.3.4", 300)]
     incidents = correlate_events(auth, ufw, [], window_seconds=600)
     assert len(incidents) == 1
-    assert incidents[0]["chain_type"] == "scan_then_auth"
+    assert incidents[0]["chain_type"] == "portscan_then_login"
     assert incidents[0]["severity"] == "high"
     assert len(incidents[0]["events"]) == 4
 
@@ -129,7 +129,7 @@ def test_scan_auth_outside_window_no_incident():
     assert incidents == []
 
 
-def test_scan_then_auth_only_blocks_within_window_included():
+def test_portscan_then_login_only_blocks_within_window_included():
     ufw = [
         block("1.2.3.4", 22, 0),
         block("1.2.3.4", 80, 30),
