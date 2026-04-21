@@ -1,65 +1,230 @@
-<img src="banner.png" alt="chain-watch banner">
-
-# chain-watch
+![chain-watch banner](banner.png)
 
 A Python CLI security log correlator for Linux systems.
 
-Reads multiple log sources simultaneously — `auth.log`, UFW/firewalld logs, and `auditd` — and correlates events by IP address and time window to detect attack chains.
+Reads multiple log sources simultaneously — `auth.log`, UFW/firewalld logs, and `auditd` — and correlates events by source IP and time window to detect multi-stage attack chains: port scans followed by brute-force, brute-force followed by successful login, and post-login lateral movement.
+
+## Prerequisites
+
+- Python 3.10 or later
+- No external packages required at runtime — stdlib only
+
+Check your Python version:
+```bash
+python3 --version
+```
+
+## Installation
+
+Clone the repository and navigate to the tool directory:
+```bash
+git clone https://github.com/elin-olsson/chain-watch.git
+cd chain-watch
+```
+
+No dependencies to install. Run directly:
+```bash
+sudo python3 chainwatch.py
+```
+
+Install `pytest` to run the test suite:
+```bash
+pip install pytest
+```
 
 ## Usage
 
-```
+```bash
 sudo python3 chainwatch.py [LOG_DIR] [options]
 ```
 
+```bash
+# Scan default log paths (auto-detected)
+sudo python3 chainwatch.py
+
+# Scan logs from a specific directory
+sudo python3 chainwatch.py /var/log
+
+# Use a custom correlation window (default: 600 s)
+sudo python3 chainwatch.py --window 300
+
+# Write results to an HTML report
+sudo python3 chainwatch.py --html report.html
+
+# Write results to JSON
+sudo python3 chainwatch.py --json report.json
+
+# Specify log files explicitly
+sudo python3 chainwatch.py \
+    --auth-log  /var/log/auth.log \
+    --ufw-log   /var/log/ufw.log \
+    --audit-log /var/log/audit/audit.log
+
+# Fedora / Red Hat paths
+sudo python3 chainwatch.py \
+    --auth-log  /var/log/secure \
+    --ufw-log   /var/log/messages \
+    --audit-log /var/log/audit/audit.log
+```
+
+### Flags
+
 | Flag | Description |
 |---|---|
-| `--window SECONDS` | Correlation time window (default: 600) |
+| `--window SECONDS` | Correlation time window in seconds (default: 600) |
 | `--json FILE` | Write JSON report to FILE |
 | `--html FILE` | Write self-contained HTML report to FILE |
 | `--auth-log FILE` | Explicit path to auth.log / secure |
-| `--ufw-log FILE` | Explicit path to firewall log (ufw.log, kern.log, /var/log/messages) |
+| `--ufw-log FILE` | Explicit path to firewall log |
 | `--audit-log FILE` | Explicit path to audit/audit.log |
 
 ## Log sources
 
-- `/var/log/auth.log` / `/var/log/secure` — SSH brute-force, sudo escalation, PAM failures
-- `/var/log/ufw.log` / `/var/log/messages` — UFW, firewalld, iptables, nftables
-- `/var/log/audit/audit.log` — auditd syscall and file access events
+| Source | Default paths | Events extracted |
+|---|---|---|
+| auth.log / secure | `/var/log/auth.log`, `/var/log/secure` | SSH brute-force, successful logins, sudo usage |
+| Firewall log | `/var/log/ufw.log`, `/var/log/kern.log`, `/var/log/messages` | Blocked/allowed packets with source IP and port |
+| auditd | `/var/log/audit/audit.log` | execve syscalls, user additions/deletions, PAM auth events |
+
+chain-watch automatically searches the default paths when no explicit path is given. All parsers handle missing or unreadable files gracefully — if a log source is not present, that source is silently skipped.
 
 ## Detected attack chains
 
-| Chain | Description | Severity |
+chain-watch detects four attack patterns. Events are grouped by source IP within a rolling time window and escalated when patterns match.
+
+**brute_force** `[medium]`  
+Five or more failed logins from the same source IP within the time window. Typical of automated password spraying or SSH dictionary attacks. Detected from `auth.log` / `secure`.
+
+**brute_then_login** `[critical]`  
+A brute-force cluster followed by a successful login from the same IP within the window. Indicates a password was guessed or found. All contributing failed attempts and the successful login are included as correlated events.
+
+**portscan_then_login** `[high]`  
+One or more firewall block events from an IP followed by a login attempt (successful or failed) from the same IP within the window. Each block and auth event is paired individually — only events within the window of each other are included, so a stale block from hours earlier is not falsely attributed to a later login attempt.
+
+**lateral_movement** `[high / critical]`  
+A successful login followed by execution of a suspicious command by the same user within the window. Correlated by user identity, not IP — the execve record from auditd is linked back to the IP of the preceding SSH session. Severity is `critical` for network tools (`wget`, `curl`, `nc`, `ncat`, `netcat`) and `high` for shell spawning (`bash`, `sh`).
+
+| Chain | Severity | Trigger |
 |---|---|---|
-| `brute_force` | ≥5 failed logins from the same IP within the time window | medium |
-| `brute_then_login` | Brute-force cluster followed by a successful login | critical |
-| `portscan_then_login` | Firewall blocks from an IP followed by a login attempt | high |
-| `lateral_movement` | Successful login followed by suspicious commands (wget, curl, nc, bash, sh) | high / critical |
+| `brute_force` | medium | ≥ 5 failed logins from the same IP in the window |
+| `brute_then_login` | critical | brute_force cluster + successful login from same IP in window |
+| `portscan_then_login` | high | firewall blocks + login attempt from same IP in window |
+| `lateral_movement` | high / critical | successful login + suspicious execve by same user in window |
 
 ## Supported firewalls
 
-| Firewall | Log format detected |
+chain-watch detects packet log lines from any of the following in the same firewall log:
+
+| Firewall | Detected format |
 |---|---|
 | UFW | `[UFW BLOCK]` / `[UFW ALLOW]` |
-| firewalld | `FINAL_REJECT:` / `IN_<zone>_DROP:` / `IN_<zone>_REJECT:` |
+| firewalld | `FINAL_REJECT:` / `IN_<zone>_DROP:` / `IN_<zone>_REJECT:` / `IN_<zone>_ACCEPT:` |
 | iptables | `DROPPED:` / `REJECTED:` |
-| nftables | `nft ...:` |
+| nftables | `nft ...:` prefix |
+
+Lines from multiple firewall types in the same log file are handled correctly — common when `kern.log` or `/var/log/messages` accumulates output from several sources.
+
+## Example output
+
+Running against a live system with several incidents:
+
+```
+════════════════════════════════════════════════════════════════════════
+  chain-watch  —  Attack Chain Correlation Report
+════════════════════════════════════════════════════════════════════════
+  Generated   2026-04-21 03:47:12
+  Window      600 s
+  Parsed      847 events  (512 auth  ·  298 ufw  ·  37 audit)
+  Incidents   3
+
+────────────────────────────────────────────────────────────────────────
+  [CRITICAL]  #1  brute_then_login  —  185.220.101.47
+  2026-04-21  03:12:04  →  03:22:47  (10m 43s)  ·  11 events
+────────────────────────────────────────────────────────────────────────
+
+    03:12:04  failed_login          user=root          ip=185.220.101.47
+    03:13:51  failed_login          user=root          ip=185.220.101.47
+    03:15:22  failed_login          user=root          ip=185.220.101.47
+    03:17:09  failed_login          user=root          ip=185.220.101.47
+    03:19:33  failed_login          user=root          ip=185.220.101.47
+    03:20:05  failed_login          user=admin         ip=185.220.101.47
+    03:20:14  failed_login          user=admin         ip=185.220.101.47
+    03:20:29  failed_login          user=admin         ip=185.220.101.47
+    03:21:01  failed_login          user=admin         ip=185.220.101.47
+    03:21:44  failed_login          user=admin         ip=185.220.101.47
+    03:22:47  successful_login      user=admin         ip=185.220.101.47
+
+────────────────────────────────────────────────────────────────────────
+  [HIGH    ]  #2  portscan_then_login  —  45.95.147.208
+  2026-04-21  03:31:02  →  03:38:15  (7m 13s)  ·  4 events
+────────────────────────────────────────────────────────────────────────
+
+    03:31:02  ufw_block             src=45.95.147.208   port=22/TCP
+    03:33:17  ufw_block             src=45.95.147.208   port=80/TCP
+    03:35:44  ufw_block             src=45.95.147.208   port=443/TCP
+    03:38:15  failed_login          user=root           ip=45.95.147.208
+
+────────────────────────────────────────────────────────────────────────
+  [MEDIUM  ]  #3  brute_force  —  80.82.70.202
+  2026-04-21  04:01:09  →  04:06:52  (5m 43s)  ·  7 events
+────────────────────────────────────────────────────────────────────────
+
+    04:01:09  failed_login          user=pi             ip=80.82.70.202
+    04:02:18  failed_login          user=pi             ip=80.82.70.202
+    04:03:32  failed_login          user=ubuntu         ip=80.82.70.202
+    04:04:01  failed_login          user=ubuntu         ip=80.82.70.202
+    04:04:55  failed_login          user=admin          ip=80.82.70.202
+    04:05:47  failed_login          user=admin          ip=80.82.70.202
+    04:06:52  failed_login          user=root           ip=80.82.70.202
+
+════════════════════════════════════════════════════════════════════════
+```
+
+### HTML report
+
+Use `--html <file>` to generate a self-contained HTML report with colour-coded severity bands and collapsible event lists:
+
+```bash
+sudo python3 chainwatch.py --html report.html
+```
+
+Open `report.html` in any browser — no internet connection required.
+
+### JSON export
+
+Use `--json <file>` for machine-readable output suitable for scripting or integration with SIEMs:
+
+```bash
+sudo python3 chainwatch.py --json report.json
+```
+
+Output includes a timestamp, parsed event counts, and an array of incident objects with `chain_type`, `source_ip`, `severity`, `start_time`, `end_time`, `duration_seconds`, and `events` fields.
 
 ## How it works
 
-Events from different log sources are parsed, normalised, and grouped by source IP address within a configurable time window. When events from multiple sources cluster around the same IP, chain-watch flags them as a potential attack chain (e.g. port scan → SSH brute-force → privilege escalation attempt).
+Events from each log source are parsed and normalised into typed event dicts with a consistent `timestamp` and `source_ip`. Events are then grouped by source IP across all three sources. For each IP, chain-watch applies a sliding time window: when events from multiple sources cluster within the window, the relevant chain conditions are evaluated in order of severity — a `brute_then_login` supersedes a plain `brute_force` for the same cluster.
+
+`lateral_movement` is an exception: auditd `execve` records carry a user identity but no IP. chain-watch links them back to the IP of the most recent successful login for that user within the window, making cross-source correlation possible without needing kernel-level network tracking.
 
 ## Requirements
 
-See `requirements.txt`. No runtime dependencies — stdlib only. Install `pytest` for tests:
+No runtime dependencies — stdlib only. Install `pytest` to run the test suite:
 
-```
+```bash
 pip install pytest
 python -m pytest tests/
 ```
+
+| Package | Version | Purpose |
+|---|---|---|
+| `pytest` | ≥ 8.0 | Test suite only — not required at runtime |
 
 ---
 
 <p align="center">
   <img src="logo.png" alt="chain-watch logo" width="140">
+</p>
+
+<p align="center">
+  <sub>The banner and logo are &copy; 2026 Elin Olsson — all rights reserved.</sub>
 </p>
