@@ -53,13 +53,33 @@ _SUDO_CMD = re.compile(
 # Detect Fedora/RHEL vs Debian/Ubuntu log path
 _DEFAULT_PATHS = ["/var/log/auth.log", "/var/log/secure"]
 
-# UFW log paths: dedicated file on Ubuntu, kern.log fallback
-_UFW_DEFAULT_PATHS = ["/var/log/ufw.log", "/var/log/kern.log"]
+# Firewall log auto-detection: UFW dedicated file → kernel logs → syslog
+_FIREWALL_DEFAULT_PATHS = [
+    "/var/log/ufw.log",    # Ubuntu: UFW dedicated log
+    "/var/log/kern.log",   # Ubuntu/Debian: kernel log (UFW + nftables)
+    "/var/log/messages",   # RHEL/Fedora/CentOS: kernel + system log (firewalld)
+    "/var/log/syslog",     # Debian/Ubuntu: general syslog
+]
 
-# "[UFW BLOCK]" or "[UFW ALLOW]" anywhere in the kernel message
-_UFW_ACTION = re.compile(r'\[UFW (BLOCK|ALLOW)\]')
+# Action-detection patterns for each supported firewall, in priority order.
+# Each entry: (compiled regex, action, firewall_name)
+_FW_ACTION_PATTERNS: list[tuple[re.Pattern, str, str]] = [
+    # UFW
+    (re.compile(r'\[UFW BLOCK\]'),                              "BLOCK", "ufw"),
+    (re.compile(r'\[UFW ALLOW\]'),                              "ALLOW", "ufw"),
+    # firewalld (iptables/nftables backend): FINAL_REJECT, IN_<zone>_REJECT/DROP/ACCEPT
+    (re.compile(r'\bFINAL_REJECT:|\bIN_\w+_(?:REJECT|DROP):'), "BLOCK", "firewalld"),
+    (re.compile(r'\bIN_\w+_ACCEPT:'),                           "ALLOW", "firewalld"),
+    # iptables LOG target with common prefixes
+    (re.compile(r'\b(?:DROPPED?|REJECTED?)\s*:', re.IGNORECASE), "BLOCK", "iptables"),
+    # nftables log statement (prefix often starts with "nft")
+    (re.compile(r'\bnft\b[^:]*:'),                              "BLOCK", "nftables"),
+]
 
-# Key=value pairs emitted by the netfilter/UFW log target
+# Minimum check: must have SRC= to be a netfilter packet log line
+_NETFILTER_SRC = re.compile(r'\bSRC=[\d.a-f:]+')
+
+# Key=value pairs emitted by netfilter log target (UFW, firewalld, iptables, nftables)
 _KV = re.compile(r'(\w+)=([\S]*)')
 
 # --- auditd log constants and helpers ---
@@ -167,6 +187,9 @@ def parse_auth_log(log_path: str | None = None) -> list[dict]:
 
     try:
         text = Path(log_path).read_text(errors="replace")
+    except FileNotFoundError:
+        print(f"Error: auth log not found at {log_path}.", file=sys.stderr)
+        return []
     except PermissionError:
         print(
             f"Error: permission denied reading {log_path}. Try running as root.",
@@ -241,16 +264,20 @@ def parse_auth_log(log_path: str | None = None) -> list[dict]:
     return events
 
 
-def parse_ufw_log(log_path: str | None = None) -> list[dict]:
-    """Read a UFW log and return structured firewall block/allow events."""
+def parse_firewall_log(log_path: str | None = None) -> list[dict]:
+    """
+    Read a firewall log and return structured block/allow events.
+    Supports UFW, firewalld (FINAL_REJECT / IN_<zone>_DROP), iptables LOG
+    target, and nftables. Auto-detects the log file if no path is given.
+    """
     if log_path is None:
-        for candidate in _UFW_DEFAULT_PATHS:
+        for candidate in _FIREWALL_DEFAULT_PATHS:
             if Path(candidate).exists():
                 log_path = candidate
                 break
         else:
             print(
-                f"Error: no UFW log found at {_UFW_DEFAULT_PATHS}. "
+                f"Error: no firewall log found at {_FIREWALL_DEFAULT_PATHS}. "
                 "Pass an explicit path or run as root.",
                 file=sys.stderr,
             )
@@ -258,6 +285,9 @@ def parse_ufw_log(log_path: str | None = None) -> list[dict]:
 
     try:
         text = Path(log_path).read_text(errors="replace")
+    except FileNotFoundError:
+        print(f"Error: firewall log not found at {log_path}.", file=sys.stderr)
+        return []
     except PermissionError:
         print(
             f"Error: permission denied reading {log_path}. Try running as root.",
@@ -274,8 +304,17 @@ def parse_ufw_log(log_path: str | None = None) -> list[dict]:
 
         raw_ts, hostname, service, message = m.groups()
 
-        am = _UFW_ACTION.search(message)
-        if not am:
+        # Identify action and firewall type from the first matching pattern
+        action = firewall = None
+        for pattern, act, fw_name in _FW_ACTION_PATTERNS:
+            if pattern.search(message):
+                action, firewall = act, fw_name
+                break
+        if action is None:
+            continue
+
+        # Confirm it's a packet log line (must have SRC=)
+        if not _NETFILTER_SRC.search(message):
             continue
 
         try:
@@ -283,16 +322,8 @@ def parse_ufw_log(log_path: str | None = None) -> list[dict]:
         except ValueError:
             continue
 
-        action = am.group(1)  # "BLOCK" or "ALLOW"
-
-        # Parse all KEY=VALUE pairs after the [UFW ...] tag
         kv = dict(_KV.findall(message))
 
-        src_ip = kv.get("SRC", "")
-        dst_ip = kv.get("DST", "")
-        protocol = kv.get("PROTO", "")
-
-        # DPT is absent for ICMP; treat it as None rather than crashing
         raw_dpt = kv.get("DPT")
         dst_port = int(raw_dpt) if raw_dpt and raw_dpt.isdigit() else None
 
@@ -303,21 +334,30 @@ def parse_ufw_log(log_path: str | None = None) -> list[dict]:
             "message": message,
             "event_type": "ufw_block" if action == "BLOCK" else "ufw_allow",
             "action": action,
-            "src_ip": src_ip,
-            "dst_ip": dst_ip,
+            "firewall": firewall,
+            "src_ip": kv.get("SRC", ""),
+            "dst_ip": kv.get("DST", ""),
             "dst_port": dst_port,
-            "protocol": protocol,
+            "protocol": kv.get("PROTO", ""),
         })
 
-    counts = {"ufw_block": 0, "ufw_allow": 0}
+    fw_counts: dict[str, int] = defaultdict(int)
     for ev in events:
-        counts[ev["event_type"]] += 1
+        fw_counts[ev["firewall"]] += 1
+    blocks = sum(1 for e in events if e["event_type"] == "ufw_block")
+    allows = sum(1 for e in events if e["event_type"] == "ufw_allow")
 
     print(f"Parsed {log_path}")
-    print(f"  ufw blocks:  {counts['ufw_block']}")
-    print(f"  ufw allows:  {counts['ufw_allow']}")
-
+    print(f"  blocks: {blocks}  allows: {allows}", end="")
+    if fw_counts:
+        detail = "  (" + "  ".join(f"{fw}: {n}" for fw, n in sorted(fw_counts.items())) + ")"
+        print(detail, end="")
+    print()
     return events
+
+
+# Backward-compatible alias
+parse_ufw_log = parse_firewall_log
 
 
 def parse_audit_log(log_path: str | None = None) -> list[dict]:
@@ -1016,7 +1056,7 @@ examples:
     )
     parser.add_argument(
         "--ufw-log", metavar="FILE",
-        help="explicit path to ufw.log or kern.log",
+        help="explicit path to firewall log (ufw.log, kern.log, /var/log/messages)",
     )
     parser.add_argument(
         "--audit-log", metavar="FILE",
