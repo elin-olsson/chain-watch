@@ -164,10 +164,15 @@ def _resolve_user(kv: dict) -> str:
     return "" if auid == _UNSET_AUID else auid
 
 
-def _parse_timestamp(raw: str) -> datetime:
+def _parse_timestamp(raw: str, _today: datetime | None = None) -> datetime:
     normalized = re.sub(r'\s+', ' ', raw.strip())
-    year = datetime.now().year
-    return datetime.strptime(f"{year} {normalized}", "%Y %b %d %H:%M:%S")
+    today = _today or datetime.now()
+    dt = datetime.strptime(f"{today.year} {normalized}", "%Y %b %d %H:%M:%S")
+    # If the parsed date is in the future, the log entry is from the previous year
+    # (e.g. a December entry parsed in January).
+    if dt.date() > today.date():
+        dt = dt.replace(year=today.year - 1)
+    return dt
 
 
 def parse_auth_log(log_path: str | None = None) -> list[dict]:
