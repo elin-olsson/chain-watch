@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -175,6 +176,122 @@ def _parse_timestamp(raw: str, _today: datetime | None = None) -> datetime:
     return dt
 
 
+# ── line-level parsers (no file I/O, used by both batch and follow mode) ─────
+
+def _parse_auth_lines(lines: list[str]) -> list[dict]:
+    events: list[dict] = []
+    for line in lines:
+        m = _HEADER.match(line)
+        if not m:
+            continue
+        raw_ts, hostname, service, message = m.groups()
+        try:
+            timestamp = _parse_timestamp(raw_ts)
+        except ValueError:
+            continue
+        base = {"timestamp": timestamp, "hostname": hostname,
+                "service": service, "message": message}
+        fm = _FAILED_SSH.search(message)
+        if fm and "sshd" in service.lower():
+            events.append({**base, "event_type": "failed_login",
+                           "user": fm.group(1), "source_ip": fm.group(2)})
+            continue
+        am = _ACCEPTED_SSH.search(message)
+        if am and "sshd" in service.lower():
+            events.append({**base, "event_type": "successful_login",
+                           "user": am.group(1), "source_ip": am.group(2)})
+            continue
+        sm = _SUDO_CMD.match(message)
+        if sm and service.lower() == "sudo":
+            events.append({**base, "event_type": "sudo_usage",
+                           "user": sm.group(1), "target_user": sm.group(2),
+                           "command": sm.group(3).strip()})
+    return events
+
+
+def _parse_firewall_lines(lines: list[str]) -> list[dict]:
+    events: list[dict] = []
+    for line in lines:
+        m = _HEADER.match(line)
+        if not m:
+            continue
+        raw_ts, hostname, service, message = m.groups()
+        action = firewall = None
+        for pattern, act, fw_name in _FW_ACTION_PATTERNS:
+            if pattern.search(message):
+                action, firewall = act, fw_name
+                break
+        if action is None or not _NETFILTER_SRC.search(message):
+            continue
+        try:
+            timestamp = _parse_timestamp(raw_ts)
+        except ValueError:
+            continue
+        kv = dict(_KV.findall(message))
+        raw_dpt = kv.get("DPT")
+        dst_port = int(raw_dpt) if raw_dpt and raw_dpt.isdigit() else None
+        events.append({
+            "timestamp": timestamp, "hostname": hostname,
+            "service": service, "message": message,
+            "event_type": "fw_block" if action == "BLOCK" else "fw_allow",
+            "action": action, "firewall": firewall,
+            "src_ip": kv.get("SRC", ""), "dst_ip": kv.get("DST", ""),
+            "dst_port": dst_port, "protocol": kv.get("PROTO", ""),
+        })
+    return events
+
+
+def _parse_audit_lines(lines: list[str]) -> list[dict]:
+    execve_args: dict[int, str] = {}
+    for line in lines:
+        parsed = _parse_audit_record(line)
+        if not parsed:
+            continue
+        rec_type, _, seqnum, kv = parsed
+        if rec_type != "EXECVE":
+            continue
+        argc = int(kv.get("argc", "0"))
+        args = [_decode_audit_hex(kv.get(f"a{i}", "")) for i in range(argc)]
+        execve_args[seqnum] = " ".join(args)
+
+    events: list[dict] = []
+    for line in lines:
+        parsed = _parse_audit_record(line)
+        if not parsed:
+            continue
+        rec_type, epoch, seqnum, kv = parsed
+        if rec_type not in _AUDIT_TYPES or rec_type == "EXECVE":
+            continue
+        timestamp = datetime.fromtimestamp(epoch)
+        pid = kv.get("pid", "")
+        user = _resolve_user(kv)
+        if rec_type == "USER_AUTH":
+            events.append({"timestamp": timestamp, "event_type": "user_auth",
+                           "user": kv.get("acct") or user, "pid": pid,
+                           "result": kv.get("res", ""), "source_ip": kv.get("addr", "")})
+        elif rec_type == "USER_LOGIN":
+            events.append({"timestamp": timestamp, "event_type": "user_login",
+                           "user": kv.get("acct") or user, "pid": pid,
+                           "result": kv.get("res", ""), "source_ip": kv.get("addr", "")})
+        elif rec_type == "ADD_USER":
+            events.append({"timestamp": timestamp, "event_type": "add_user",
+                           "user": user, "target_user": kv.get("acct", ""),
+                           "pid": pid, "result": kv.get("res", ""), "command": None})
+        elif rec_type == "DEL_USER":
+            events.append({"timestamp": timestamp, "event_type": "del_user",
+                           "user": user, "target_user": kv.get("acct", ""),
+                           "pid": pid, "result": kv.get("res", ""), "command": None})
+        elif rec_type == "SYSCALL" and kv.get("SYSCALL") == "execve":
+            raw_success = kv.get("success", "")
+            result = ("success" if raw_success == "yes"
+                      else "failed" if raw_success == "no" else raw_success)
+            exe = kv.get("exe", kv.get("comm", ""))
+            events.append({"timestamp": timestamp, "event_type": "execve",
+                           "user": user, "pid": pid, "result": result,
+                           "command": execve_args.get(seqnum) or exe})
+    return events
+
+
 def parse_auth_log(log_path: str | None = None) -> list[dict]:
     """Read an auth log and return structured SSH and sudo events."""
     if log_path is None:
@@ -202,60 +319,7 @@ def parse_auth_log(log_path: str | None = None) -> list[dict]:
         )
         return []
 
-    events: list[dict] = []
-
-    for line in text.splitlines():
-        m = _HEADER.match(line)
-        if not m:
-            continue
-
-        raw_ts, hostname, service, message = m.groups()
-
-        try:
-            timestamp = _parse_timestamp(raw_ts)
-        except ValueError:
-            continue
-
-        base = {
-            "timestamp": timestamp,
-            "hostname": hostname,
-            "service": service,
-            "message": message,
-        }
-
-        # Failed SSH login
-        fm = _FAILED_SSH.search(message)
-        if fm and "sshd" in service.lower():
-            events.append({
-                **base,
-                "event_type": "failed_login",
-                "user": fm.group(1),
-                "source_ip": fm.group(2),
-            })
-            continue
-
-        # Successful SSH login
-        am = _ACCEPTED_SSH.search(message)
-        if am and "sshd" in service.lower():
-            events.append({
-                **base,
-                "event_type": "successful_login",
-                "user": am.group(1),
-                "source_ip": am.group(2),
-            })
-            continue
-
-        # Sudo command (the audit line, not the pam_unix session lines)
-        sm = _SUDO_CMD.match(message)
-        if sm and service.lower() == "sudo":
-            events.append({
-                **base,
-                "event_type": "sudo_usage",
-                "user": sm.group(1),
-                "target_user": sm.group(2),
-                "command": sm.group(3).strip(),
-            })
-            continue
+    events = _parse_auth_lines(text.splitlines())
 
     counts = {"failed_login": 0, "successful_login": 0, "sudo_usage": 0}
     for ev in events:
@@ -300,51 +364,7 @@ def parse_firewall_log(log_path: str | None = None) -> list[dict]:
         )
         return []
 
-    events: list[dict] = []
-
-    for line in text.splitlines():
-        m = _HEADER.match(line)
-        if not m:
-            continue
-
-        raw_ts, hostname, service, message = m.groups()
-
-        # Identify action and firewall type from the first matching pattern
-        action = firewall = None
-        for pattern, act, fw_name in _FW_ACTION_PATTERNS:
-            if pattern.search(message):
-                action, firewall = act, fw_name
-                break
-        if action is None:
-            continue
-
-        # Confirm it's a packet log line (must have SRC=)
-        if not _NETFILTER_SRC.search(message):
-            continue
-
-        try:
-            timestamp = _parse_timestamp(raw_ts)
-        except ValueError:
-            continue
-
-        kv = dict(_KV.findall(message))
-
-        raw_dpt = kv.get("DPT")
-        dst_port = int(raw_dpt) if raw_dpt and raw_dpt.isdigit() else None
-
-        events.append({
-            "timestamp": timestamp,
-            "hostname": hostname,
-            "service": service,
-            "message": message,
-            "event_type": "fw_block" if action == "BLOCK" else "fw_allow",
-            "action": action,
-            "firewall": firewall,
-            "src_ip": kv.get("SRC", ""),
-            "dst_ip": kv.get("DST", ""),
-            "dst_port": dst_port,
-            "protocol": kv.get("PROTO", ""),
-        })
+    events = _parse_firewall_lines(text.splitlines())
 
     fw_counts: dict[str, int] = defaultdict(int)
     for ev in events:
@@ -381,96 +401,7 @@ def parse_audit_log(log_path: str | None = None) -> list[dict]:
         )
         return []
 
-    # First pass: index EXECVE records by sequence number so we can join them
-    # onto their companion SYSCALL record (same seqnum, contiguous lines).
-    execve_args: dict[int, str] = {}
-    for line in lines:
-        parsed = _parse_audit_record(line)
-        if not parsed:
-            continue
-        rec_type, _, seqnum, kv = parsed
-        if rec_type != "EXECVE":
-            continue
-        argc = int(kv.get("argc", "0"))
-        args = [_decode_audit_hex(kv.get(f"a{i}", "")) for i in range(argc)]
-        execve_args[seqnum] = " ".join(args)
-
-    # Second pass: emit one structured event per relevant record.
-    events: list[dict] = []
-
-    for line in lines:
-        parsed = _parse_audit_record(line)
-        if not parsed:
-            continue
-        rec_type, epoch, seqnum, kv = parsed
-
-        if rec_type not in _AUDIT_TYPES or rec_type == "EXECVE":
-            continue
-
-        timestamp = datetime.fromtimestamp(epoch)
-        pid = kv.get("pid", "")
-        user = _resolve_user(kv)
-
-        if rec_type == "USER_AUTH":
-            # acct= is the account being authenticated; prefer it over the calling uid
-            events.append({
-                "timestamp": timestamp,
-                "event_type": "user_auth",
-                "user": kv.get("acct") or user,
-                "pid": pid,
-                "result": kv.get("res", ""),
-                "source_ip": kv.get("addr", ""),
-            })
-
-        elif rec_type == "USER_LOGIN":
-            events.append({
-                "timestamp": timestamp,
-                "event_type": "user_login",
-                "user": kv.get("acct") or user,
-                "pid": pid,
-                "result": kv.get("res", ""),
-                "source_ip": kv.get("addr", ""),
-            })
-
-        elif rec_type == "ADD_USER":
-            events.append({
-                "timestamp": timestamp,
-                "event_type": "add_user",
-                "user": user,
-                "target_user": kv.get("acct", ""),
-                "pid": pid,
-                "result": kv.get("res", ""),
-                "command": None,
-            })
-
-        elif rec_type == "DEL_USER":
-            events.append({
-                "timestamp": timestamp,
-                "event_type": "del_user",
-                "user": user,
-                "target_user": kv.get("acct", ""),
-                "pid": pid,
-                "result": kv.get("res", ""),
-                "command": None,
-            })
-
-        elif rec_type == "SYSCALL" and kv.get("SYSCALL") == "execve":
-            # success=yes/no on SYSCALL records
-            raw_success = kv.get("success", "")
-            result = "success" if raw_success == "yes" else ("failed" if raw_success == "no" else raw_success)
-
-            exe = kv.get("exe", kv.get("comm", ""))
-            # Prefer reconstructed full argv from companion EXECVE record
-            command = execve_args.get(seqnum) or exe
-
-            events.append({
-                "timestamp": timestamp,
-                "event_type": "execve",
-                "user": user,
-                "pid": pid,
-                "result": result,
-                "command": command,
-            })
+    events = _parse_audit_lines(lines)
 
     counts: dict[str, int] = {}
     for ev in events:
@@ -512,6 +443,7 @@ def correlate_events(
     ufw_events: list[dict],
     audit_events: list[dict],
     window_seconds: int = 600,
+    quiet: bool = False,
 ) -> list[dict]:
     """
     Correlate events from all three log parsers into named attack-chain incidents.
@@ -699,13 +631,14 @@ def correlate_events(
     for inc in incidents:
         counts[inc["chain_type"]] += 1
 
-    print(f"Correlated {total_events} events → {len(incidents)} incident(s)")
-    for chain_type, n in sorted(counts.items()):
-        sevs = [inc["severity"] for inc in incidents if inc["chain_type"] == chain_type]
-        worst = min(sevs, key=lambda s: severity_order.get(s, 99))
-        print(f"  {chain_type + ':':<24} {n}  (worst severity: {worst})")
-    if not incidents:
-        print("  (no attack chains detected)")
+    if not quiet:
+        print(f"Correlated {total_events} events → {len(incidents)} incident(s)")
+        for chain_type, n in sorted(counts.items()):
+            sevs = [inc["severity"] for inc in incidents if inc["chain_type"] == chain_type]
+            worst = min(sevs, key=lambda s: severity_order.get(s, 99))
+            print(f"  {chain_type + ':':<24} {n}  (worst severity: {worst})")
+        if not incidents:
+            print("  (no attack chains detected)")
 
     return incidents
 
@@ -1060,6 +993,119 @@ def _filter_events(
     return result
 
 
+# ── follow mode ───────────────────────────────────────────────────────────────
+
+_AUTH_EVENT_TYPES  = frozenset({"failed_login", "successful_login", "sudo_usage"})
+_FW_EVENT_TYPES    = frozenset({"fw_block", "fw_allow"})
+_AUDIT_EVENT_TYPES = frozenset({"execve", "user_auth", "user_login", "add_user", "del_user"})
+
+
+def _print_follow_incident(inc: dict) -> None:
+    sev      = inc["severity"]
+    duration = _fmt_duration(inc["start_time"], inc["end_time"])
+    t_start  = inc["start_time"].strftime("%H:%M:%S")
+    t_end    = inc["end_time"].strftime("%H:%M:%S")
+    print()
+    print(_rule())
+    print(f"  {_sev_tag(sev)}  {inc['chain_type']}  —  {inc['source_ip']}")
+    print(f"  {t_start}  →  {t_end}  ({duration})  ·  {len(inc['events'])} events")
+    print(_rule())
+    for ev in inc["events"]:
+        print(_fmt_event(ev))
+    print()
+
+
+def _follow_mode(
+    auth_path: str | None,
+    ufw_path: str | None,
+    audit_path: str | None,
+    window_seconds: int,
+    poll_interval: int,
+) -> None:
+    monitored = [
+        (auth_path,  "auth"),
+        (ufw_path,   "fw"),
+        (audit_path, "audit"),
+    ]
+
+    # Start from the current end of each file — don't replay history
+    offsets: dict[str, int] = {}
+    for path, _ in monitored:
+        if path:
+            try:
+                offsets[path] = Path(path).stat().st_size
+            except (FileNotFoundError, PermissionError):
+                offsets[path] = 0
+
+    event_buffer: list[dict] = []
+    seen_incidents: set[tuple] = set()
+    window = timedelta(seconds=window_seconds)
+
+    print(_c(f"Following logs (poll every {poll_interval}s, window {window_seconds}s)… "
+             "Ctrl+C to stop.", _ANSI_DIM))
+
+    try:
+        while True:
+            time.sleep(poll_interval)
+            now = datetime.now()
+            got_new = False
+
+            for path, kind in monitored:
+                if not path:
+                    continue
+                try:
+                    size = Path(path).stat().st_size
+                except (FileNotFoundError, PermissionError):
+                    continue
+
+                prev = offsets.get(path, size)
+                if size < prev:
+                    prev = 0  # file rotated / truncated
+                if size <= prev:
+                    offsets[path] = size
+                    continue
+
+                with open(path, errors="replace") as fh:
+                    fh.seek(prev)
+                    new_text = fh.read()
+                offsets[path] = size
+
+                new_lines = new_text.splitlines()
+                if kind == "auth":
+                    new_events = _parse_auth_lines(new_lines)
+                elif kind == "fw":
+                    new_events = _parse_firewall_lines(new_lines)
+                else:
+                    new_events = _parse_audit_lines(new_lines)
+
+                if new_events:
+                    event_buffer.extend(new_events)
+                    got_new = True
+
+            if not got_new:
+                continue
+
+            # Drop events older than 2× window to bound memory use
+            cutoff = now - window * 2
+            event_buffer = [e for e in event_buffer if e["timestamp"] >= cutoff]
+
+            auth_buf  = [e for e in event_buffer if e["event_type"] in _AUTH_EVENT_TYPES]
+            fw_buf    = [e for e in event_buffer if e["event_type"] in _FW_EVENT_TYPES]
+            audit_buf = [e for e in event_buffer if e["event_type"] in _AUDIT_EVENT_TYPES]
+
+            incidents = correlate_events(
+                auth_buf, fw_buf, audit_buf, window_seconds=window_seconds, quiet=True
+            )
+            for inc in incidents:
+                key = (inc["chain_type"], inc["source_ip"], inc["start_time"])
+                if key not in seen_incidents:
+                    seen_incidents.add(key)
+                    _print_follow_incident(inc)
+
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
 # ── path resolution helper ────────────────────────────────────────────────────
 
 def _resolve_log_paths(
@@ -1107,6 +1153,8 @@ examples:
   sudo chainwatch --window 300                 5-minute correlation window
   sudo chainwatch --since 03:00 --until 05:00  analyse a specific time range
   sudo chainwatch --since "2026-04-21 00:00"   from a specific date/time
+  sudo chainwatch --follow                     watch logs and alert in real time
+  sudo chainwatch --follow --interval 10       poll every 10 seconds
   sudo chainwatch --json out.json              write JSON report
   sudo chainwatch --html report.html           write HTML report
   chainwatch --auth-log auth.log.sample        test with a specific file
@@ -1133,6 +1181,14 @@ examples:
         help="correlation time window in seconds (default: 600)",
     )
     parser.add_argument(
+        "--follow", action="store_true",
+        help="watch log files for new entries and alert on new incidents in real time",
+    )
+    parser.add_argument(
+        "--interval", type=int, default=5, metavar="SECONDS",
+        help="polling interval for --follow mode in seconds (default: 5)",
+    )
+    parser.add_argument(
         "--since", metavar="TIME", type=_parse_time_arg,
         help="ignore events before TIME (HH:MM, HH:MM:SS, or YYYY-MM-DD HH:MM[:SS])",
     )
@@ -1153,6 +1209,10 @@ examples:
     auth_path, ufw_path, audit_path = _resolve_log_paths(
         args.log_dir, args.auth_log, args.ufw_log, args.audit_log,
     )
+
+    if args.follow:
+        _follow_mode(auth_path, ufw_path, audit_path, args.window, args.interval)
+        return
 
     print(_c("Parsing logs…", _ANSI_DIM))
     auth_events  = parse_auth_log(auth_path)
