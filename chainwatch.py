@@ -1019,6 +1019,47 @@ def _write_html_report(
     print(f"HTML report written to {path}")
 
 
+# ── time-window filter ───────────────────────────────────────────────────────
+
+_TIME_FORMATS = [
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%H:%M:%S",
+    "%H:%M",
+]
+
+
+def _parse_time_arg(value: str) -> datetime:
+    """Parse --since / --until value. Time-only formats assume today's date."""
+    for fmt in _TIME_FORMATS:
+        try:
+            dt = datetime.strptime(value, fmt)
+            if fmt in ("%H:%M:%S", "%H:%M"):
+                dt = dt.replace(year=datetime.now().year,
+                                month=datetime.now().month,
+                                day=datetime.now().day)
+            return dt
+        except ValueError:
+            continue
+    raise argparse.ArgumentTypeError(
+        f"Cannot parse time {value!r}. "
+        "Use HH:MM, HH:MM:SS, or YYYY-MM-DD HH:MM[:SS]."
+    )
+
+
+def _filter_events(
+    events: list[dict],
+    since: datetime | None,
+    until: datetime | None,
+) -> list[dict]:
+    result = events
+    if since:
+        result = [e for e in result if e["timestamp"] >= since]
+    if until:
+        result = [e for e in result if e["timestamp"] <= until]
+    return result
+
+
 # ── path resolution helper ────────────────────────────────────────────────────
 
 def _resolve_log_paths(
@@ -1061,12 +1102,14 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  sudo chainwatch                         auto-detect all log paths
-  sudo chainwatch /var/log                use a specific log directory
-  sudo chainwatch --window 300            5-minute correlation window
-  sudo chainwatch --json out.json         write JSON report
-  sudo chainwatch --html report.html      write HTML report
-  chainwatch --auth-log auth.log.sample   test with a specific file
+  sudo chainwatch                              auto-detect all log paths
+  sudo chainwatch /var/log                     use a specific log directory
+  sudo chainwatch --window 300                 5-minute correlation window
+  sudo chainwatch --since 03:00 --until 05:00  analyse a specific time range
+  sudo chainwatch --since "2026-04-21 00:00"   from a specific date/time
+  sudo chainwatch --json out.json              write JSON report
+  sudo chainwatch --html report.html           write HTML report
+  chainwatch --auth-log auth.log.sample        test with a specific file
 """,
     )
     parser.add_argument(
@@ -1090,6 +1133,14 @@ examples:
         help="correlation time window in seconds (default: 600)",
     )
     parser.add_argument(
+        "--since", metavar="TIME", type=_parse_time_arg,
+        help="ignore events before TIME (HH:MM, HH:MM:SS, or YYYY-MM-DD HH:MM[:SS])",
+    )
+    parser.add_argument(
+        "--until", metavar="TIME", type=_parse_time_arg,
+        help="ignore events after TIME (same formats as --since)",
+    )
+    parser.add_argument(
         "--json", metavar="FILE", dest="json_out",
         help="write JSON report to FILE",
     )
@@ -1108,6 +1159,18 @@ examples:
     ufw_events   = parse_ufw_log(ufw_path)
     audit_events = parse_audit_log(audit_path)
     print()
+
+    since = getattr(args, "since", None)
+    until = getattr(args, "until", None)
+    if since or until:
+        auth_events  = _filter_events(auth_events,  since, until)
+        ufw_events   = _filter_events(ufw_events,   since, until)
+        audit_events = _filter_events(audit_events, since, until)
+        lo = since.strftime("%H:%M:%S") if since else "start"
+        hi = until.strftime("%H:%M:%S") if until else "end"
+        print(_c(f"  Time filter: {lo} → {hi}  "
+                 f"({len(auth_events)} auth  ·  {len(ufw_events)} ufw  ·  {len(audit_events)} audit)", _ANSI_DIM))
+        print()
 
     incidents = correlate_events(
         auth_events, ufw_events, audit_events, window_seconds=args.window,
