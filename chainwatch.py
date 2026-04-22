@@ -9,6 +9,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+__version__ = "1.0.0"
+
 # ANSI colour codes — applied only when stdout is a real TTY
 _ANSI_RED    = "\033[31m"
 _ANSI_YELLOW = "\033[33m"
@@ -1160,6 +1162,7 @@ examples:
   chainwatch --auth-log auth.log.sample        test with a specific file
 """,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "log_dir", nargs="?", metavar="LOG_DIR",
         help="directory containing log files (auto-detects standard paths if omitted)",
