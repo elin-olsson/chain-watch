@@ -332,7 +332,7 @@ def parse_firewall_log(log_path: str | None = None) -> list[dict]:
             "hostname": hostname,
             "service": service,
             "message": message,
-            "event_type": "ufw_block" if action == "BLOCK" else "ufw_allow",
+            "event_type": "fw_block" if action == "BLOCK" else "fw_allow",
             "action": action,
             "firewall": firewall,
             "src_ip": kv.get("SRC", ""),
@@ -344,8 +344,8 @@ def parse_firewall_log(log_path: str | None = None) -> list[dict]:
     fw_counts: dict[str, int] = defaultdict(int)
     for ev in events:
         fw_counts[ev["firewall"]] += 1
-    blocks = sum(1 for e in events if e["event_type"] == "ufw_block")
-    allows = sum(1 for e in events if e["event_type"] == "ufw_allow")
+    blocks = sum(1 for e in events if e["event_type"] == "fw_block")
+    allows = sum(1 for e in events if e["event_type"] == "fw_allow")
 
     print(f"Parsed {log_path}")
     print(f"  blocks: {blocks}  allows: {allows}", end="")
@@ -533,7 +533,7 @@ def correlate_events(
         key=lambda e: e["timestamp"],
     )
     ufw_blocks = sorted(
-        (e for e in ufw_events if e["event_type"] == "ufw_block"),
+        (e for e in ufw_events if e["event_type"] == "fw_block"),
         key=lambda e: e["timestamp"],
     )
     execve_events = sorted(
@@ -566,6 +566,12 @@ def correlate_events(
     for ev in execve_events:
         if user := ev.get("user", ""):
             execve_by_user[user].append(ev)
+
+    sudo_by_user: dict[str, list[dict]] = defaultdict(list)
+    for ev in auth_events:
+        if ev["event_type"] == "sudo_usage":
+            if user := ev.get("user", ""):
+                sudo_by_user[user].append(ev)
 
     # ── 1 & 2: brute_force / brute_then_login ──────────────────────────────
     for ip, fails in fails_by_ip.items():
@@ -630,6 +636,12 @@ def correlate_events(
             continue
 
         used_blocks = [b for b in blocks if id(b) in paired_block_ids]
+        # Require blocks against at least 2 distinct ports — a single blocked
+        # connection could be normal noise, not a scan.
+        distinct_ports = {b["dst_port"] for b in used_blocks if b.get("dst_port") is not None}
+        if len(distinct_ports) < 2:
+            continue
+
         all_events = sorted(used_blocks + qualifying_auths, key=lambda e: e["timestamp"])
         incidents.append({
             "chain_type": "portscan_then_login",
@@ -652,18 +664,24 @@ def correlate_events(
             if timedelta(0) <= e["timestamp"] - login_time <= window
             and _command_bin(e.get("command", "")) in _SUSPICIOUS_BINS
         ]
-        if not follow_execs:
+        follow_sudos = [
+            e for e in sudo_by_user.get(login_user, [])
+            if timedelta(0) <= e["timestamp"] - login_time <= window
+        ]
+        if not follow_execs and not follow_sudos:
             continue
 
         bins_used = {_command_bin(e.get("command", "")) for e in follow_execs}
-        severity = "critical" if bins_used & _NETWORK_BINS else "high"
+        sudo_to_root = any(e.get("target_user") == "root" for e in follow_sudos)
+        severity = "critical" if (bins_used & _NETWORK_BINS or sudo_to_root) else "high"
 
+        follow_all = sorted(follow_execs + follow_sudos, key=lambda e: e["timestamp"])
         incidents.append({
             "chain_type": "lateral_movement",
             "source_ip": _event_ip(login),
-            "events": [login] + follow_execs,
+            "events": [login] + follow_all,
             "start_time": login_time,
-            "end_time": max(e["timestamp"] for e in follow_execs),
+            "end_time": max(e["timestamp"] for e in follow_all),
             "severity": severity,
         })
 
@@ -721,7 +739,7 @@ def _fmt_event(ev: dict) -> str:
 
     if et in ("failed_login", "successful_login", "user_auth", "user_login"):
         return f"    {ts}  {et:<20}  user={user:<12}  ip={ip}"
-    if et in ("ufw_block", "ufw_allow"):
+    if et in ("fw_block", "fw_allow"):
         port  = ev.get("dst_port", "")
         proto = ev.get("protocol", "")
         return f"    {ts}  {et:<20}  src={ip:<15}  port={port}/{proto}"
@@ -891,7 +909,7 @@ def _html_event_row(ev: dict) -> str:
 
     if et in ("failed_login", "successful_login", "user_auth", "user_login"):
         detail = f"user={user}  ip={ip}"
-    elif et in ("ufw_block", "ufw_allow"):
+    elif et in ("fw_block", "fw_allow"):
         port  = e(str(ev.get("dst_port", "")))
         proto = e(ev.get("protocol", ""))
         detail = f"src={ip}  port={port}/{proto}"

