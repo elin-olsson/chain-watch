@@ -1,5 +1,7 @@
 ![chain-watch banner](banner.png)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A Python CLI security log correlator for Linux systems.
 
 Reads multiple log sources simultaneously — `auth.log`, UFW/firewalld logs, and `auditd` — and correlates events by source IP and time window to detect multi-stage attack chains: port scans followed by brute-force, brute-force followed by successful login, and post-login lateral movement.
@@ -48,6 +50,14 @@ sudo python3 chainwatch.py /var/log
 # Use a custom correlation window (default: 600 s)
 sudo python3 chainwatch.py --window 300
 
+# Filter by time range
+sudo python3 chainwatch.py --since 03:00 --until 05:00
+sudo python3 chainwatch.py --since "2026-04-21 00:00"
+
+# Watch logs live and alert on new incidents (Ctrl+C to stop)
+sudo python3 chainwatch.py --follow
+sudo python3 chainwatch.py --follow --interval 10
+
 # Write results to an HTML report
 sudo python3 chainwatch.py --html report.html
 
@@ -72,6 +82,10 @@ sudo python3 chainwatch.py \
 | Flag | Description |
 |---|---|
 | `--window SECONDS` | Correlation time window in seconds (default: 600) |
+| `--since TIME` | Ignore events before TIME (`HH:MM`, `HH:MM:SS`, or `YYYY-MM-DD HH:MM[:SS]`) |
+| `--until TIME` | Ignore events after TIME (same formats as `--since`) |
+| `--follow` | Watch log files and alert on new incidents in real time |
+| `--interval SECONDS` | Poll interval for `--follow` mode in seconds (default: 5) |
 | `--json FILE` | Write JSON report to FILE |
 | `--html FILE` | Write self-contained HTML report to FILE |
 | `--auth-log FILE` | Explicit path to auth.log / secure |
@@ -99,10 +113,10 @@ Five or more failed logins from the same source IP within the time window. Typic
 A brute-force cluster followed by a successful login from the same IP within the window. Indicates a password was guessed or found. All contributing failed attempts and the successful login are included as correlated events.
 
 **portscan_then_login** `[high]`  
-One or more firewall block events from an IP followed by a login attempt (successful or failed) from the same IP within the window. Each block and auth event is paired individually — only events within the window of each other are included, so a stale block from hours earlier is not falsely attributed to a later login attempt.
+Firewall block events across at least two distinct destination ports from an IP, followed by a login attempt from the same IP within the window. The two-port minimum filters single blocked connections that are normal background noise. Each block and auth event is paired individually — only events within the window of each other are included, so a stale block from hours earlier is not falsely attributed to a later login attempt.
 
 **lateral_movement** `[high / critical]`  
-A successful login followed by execution of a suspicious command by the same user within the window. Correlated by user identity, not IP — the execve record from auditd is linked back to the IP of the preceding SSH session. Severity is `critical` for network tools (`wget`, `curl`, `nc`, `ncat`, `netcat`) and `high` for shell spawning (`bash`, `sh`).
+A successful login followed by a suspicious execve (via auditd) or a `sudo` invocation (via auth.log) by the same user within the window. Correlated by user identity, not IP — events are linked back to the IP of the preceding SSH session. Severity is `critical` for network tools (`wget`, `curl`, `nc`, `ncat`, `netcat`) or `sudo` to root, and `high` for shell spawning (`bash`, `sh`) or `sudo` to any other user.
 
 | Chain | Severity | Trigger |
 |---|---|---|
@@ -159,9 +173,9 @@ Running against a live system with several incidents:
   2026-04-21  03:31:02  →  03:38:15  (7m 13s)  ·  4 events
 ────────────────────────────────────────────────────────────────────────
 
-    03:31:02  ufw_block             src=45.95.147.208   port=22/TCP
-    03:33:17  ufw_block             src=45.95.147.208   port=80/TCP
-    03:35:44  ufw_block             src=45.95.147.208   port=443/TCP
+    03:31:02  fw_block              src=45.95.147.208   port=22/TCP
+    03:33:17  fw_block              src=45.95.147.208   port=80/TCP
+    03:35:44  fw_block              src=45.95.147.208   port=443/TCP
     03:38:15  failed_login          user=root           ip=45.95.147.208
 
 ────────────────────────────────────────────────────────────────────────
@@ -219,12 +233,14 @@ python -m pytest tests/
 |---|---|---|
 | `pytest` | ≥ 8.0 | Test suite only — not required at runtime |
 
+## License
+
+chain-watch is released under the [MIT License](LICENSE). © 2026 Elin Olsson.
+
+The banner and logo images are © 2026 Elin Olsson — all rights reserved.
+
 ---
 
 <p align="center">
   <img src="logo.png" alt="chain-watch logo" width="140">
-</p>
-
-<p align="center">
-  <sub>The banner and logo are &copy; 2026 Elin Olsson — all rights reserved.</sub>
 </p>
