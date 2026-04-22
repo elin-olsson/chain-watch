@@ -220,7 +220,7 @@ Events from each log source are parsed and normalised into typed event dicts wit
 
 `lateral_movement` is an exception: auditd `execve` records carry a user identity but no IP. chain-watch links them back to the IP of the most recent successful login for that user within the window, making cross-source correlation possible without needing kernel-level network tracking.
 
-## Requirements
+## Dependencies
 
 No runtime dependencies — stdlib only. Install `pytest` to run the test suite:
 
@@ -233,14 +233,12 @@ python -m pytest tests/
 |---|---|---|
 | `pytest` | ≥ 8.0 | Test suite only — not required at runtime |
 
-## License
-
-chain-watch is released under the [MIT License](LICENSE). © 2026 Elin Olsson.
-
-The banner and logo images are © 2026 Elin Olsson — all rights reserved.
-
 ---
 
 <p align="center">
-  <img src="logo.png" alt="chain-watch logo" width="140">
+  <img src="logo.png" alt="chain-watch logo" width="200">
+</p>
+
+<p align="center">
+  <sub>The banner and logo are &copy; 2026 Elin Olsson — all rights reserved, not covered by the MIT license.</sub>
 </p>
