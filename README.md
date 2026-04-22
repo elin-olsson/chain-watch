@@ -1,6 +1,6 @@
 ![chain-watch banner](banner.png)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml)
 
 A Python CLI security log correlator for Linux systems.
 
