@@ -120,6 +120,26 @@ def test_nftables_drop(tmp_path):
     assert events[0]["firewall"] == "nftables"
 
 
+# ── IPv6 source addresses ─────────────────────────────────────────────────────
+
+def test_ufw_block_ipv6_uppercase(tmp_path):
+    line = ("Apr 20 10:00:01 host kernel: [1.0] [UFW BLOCK] "
+            "IN=eth0 OUT= SRC=FE80::1 DST=::1 LEN=40 PROTO=TCP SPT=1234 DPT=22")
+    f = write_log(tmp_path, line + "\n")
+    events = parse_firewall_log(f)
+    assert len(events) == 1
+    assert events[0]["src_ip"] == "FE80::1"
+
+
+def test_ufw_block_ipv6_lowercase(tmp_path):
+    line = ("Apr 20 10:00:01 host kernel: [1.0] [UFW BLOCK] "
+            "IN=eth0 OUT= SRC=fe80::1 DST=::1 LEN=40 PROTO=TCP SPT=1234 DPT=22")
+    f = write_log(tmp_path, line + "\n")
+    events = parse_firewall_log(f)
+    assert len(events) == 1
+    assert events[0]["src_ip"] == "fe80::1"
+
+
 # ── noise filtering ───────────────────────────────────────────────────────────
 
 def test_non_firewall_kernel_lines_ignored(tmp_path):

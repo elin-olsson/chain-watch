@@ -80,7 +80,7 @@ _FW_ACTION_PATTERNS: list[tuple[re.Pattern, str, str]] = [
 ]
 
 # Minimum check: must have SRC= to be a netfilter packet log line
-_NETFILTER_SRC = re.compile(r'\bSRC=[\d.a-f:]+')
+_NETFILTER_SRC = re.compile(r'\bSRC=[\dA-Fa-f.:]+')
 
 # Key=value pairs emitted by netfilter log target (UFW, firewalld, iptables, nftables)
 _KV = re.compile(r'(\w+)=([\S]*)')
@@ -1087,9 +1087,10 @@ def _follow_mode(
             if not got_new:
                 continue
 
-            # Drop events older than 2× window to bound memory use
+            # Drop events and seen-incident keys older than 2× window
             cutoff = now - window * 2
             event_buffer = [e for e in event_buffer if e["timestamp"] >= cutoff]
+            seen_incidents = {k for k in seen_incidents if k[2] >= cutoff}
 
             auth_buf  = [e for e in event_buffer if e["event_type"] in _AUTH_EVENT_TYPES]
             fw_buf    = [e for e in event_buffer if e["event_type"] in _FW_EVENT_TYPES]
@@ -1225,6 +1226,13 @@ examples:
 
     since = getattr(args, "since", None)
     until = getattr(args, "until", None)
+    if since and until and since > until:
+        print(
+            f"Error: --since ({since.strftime('%Y-%m-%d %H:%M:%S')}) is after "
+            f"--until ({until.strftime('%Y-%m-%d %H:%M:%S')}) — no events will match.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if since or until:
         auth_events  = _filter_events(auth_events,  since, until)
         ufw_events   = _filter_events(ufw_events,   since, until)
