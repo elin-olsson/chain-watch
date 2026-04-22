@@ -20,4 +20,5 @@ build/
 
 # Generated reports (keep samples out of the repo)
 *.html
+!rapport_*.html
 *.json

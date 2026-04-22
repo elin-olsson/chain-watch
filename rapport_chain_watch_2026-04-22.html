@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chain-watch — Utvecklingsrapport 2026-04-22</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px;
+       background: #f4f6f9; color: #222; padding: 24px; }
+h1 { font-size: 24px; color: #1a3a5c; margin-bottom: 4px; }
+.subtitle { color: #555; margin-bottom: 24px; font-size: 13px; }
+h2 { font-size: 18px; color: #1a3a5c; margin: 32px 0 12px; border-bottom: 2px solid #1a3a5c; padding-bottom: 4px; }
+h3 { font-size: 13px; font-weight: 600; color: #333; margin: 20px 0 6px;
+     text-transform: uppercase; letter-spacing: 0.5px; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 16px; background: #fff;
+        border-radius: 6px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+th { background: #1a3a5c; color: #fff; text-align: left; padding: 8px 12px;
+     font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+td { padding: 7px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #f9fbfd; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 3px;
+         font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+.done  { background: #e6f4ea; color: #1e7e34; }
+.fix   { background: #fdecea; color: #c0392b; }
+.feat  { background: #e8f0fe; color: #1a56b0; }
+.infra { background: #fff3cd; color: #856404; }
+.test  { background: #f0e6ff; color: #6a1b9a; }
+.summary-box { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
+.summary-card { background: #fff; border-radius: 6px; padding: 16px 24px;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.1); min-width: 140px; text-align: center; }
+.summary-card .number { font-size: 32px; font-weight: 700; }
+.summary-card .label  { font-size: 12px; color: #777; margin-top: 2px; text-transform: uppercase; }
+.num-fix  { color: #c0392b; }
+.num-feat { color: #1a56b0; }
+.num-test { color: #6a1b9a; }
+.num-infra { color: #856404; }
+.num-ok   { color: #1e7e34; }
+.note-box { background: #fffbe6; border-left: 4px solid #f0ad00;
+            border-radius: 4px; padding: 8px 12px; margin-top: 4px;
+            font-size: 12px; color: #555; }
+.note-label { font-weight: 600; color: #b07d00; margin-right: 4px; }
+.section-block { background: #fff; border-radius: 8px; padding: 20px 24px;
+                 box-shadow: 0 2px 8px rgba(0,0,0,0.07); margin-bottom: 32px; }
+code { font-family: 'Consolas', 'Courier New', monospace; font-size: 12px;
+       background: #f0f2f5; padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>chain-watch — Utvecklingsrapport</h1>
+<p class="subtitle">Datum: 2026-04-22 &nbsp;·&nbsp; Projekt: <a href="https://github.com/elin-olsson/chain-watch" style="color:#1a56b0;">github.com/elin-olsson/chain-watch</a> &nbsp;·&nbsp; Version: v1.0.0</p>
+
+<div class="summary-box">
+  <div class="summary-card"><div class="number num-fix">6</div><div class="label">Buggar fixade</div></div>
+  <div class="summary-card"><div class="number num-feat">2</div><div class="label">Nya features</div></div>
+  <div class="summary-card"><div class="number num-test">29</div><div class="label">Tester tillagda</div></div>
+  <div class="summary-card"><div class="number num-infra">5</div><div class="label">Infrastruktur</div></div>
+  <div class="summary-card"><div class="number num-ok">✓</div><div class="label">CI Grön</div></div>
+</div>
+
+<h2>Buggar</h2>
+<div class="section-block">
+
+<h3>Förexisterande kodfel (identifierade och fixade)</h3>
+<table><thead><tr><th>Fil</th><th>Status</th><th>Beskrivning</th></tr></thead><tbody>
+<tr>
+  <td><code>chainwatch.py</code> — event_type</td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td>Brandväggsevents hade inkonsekvent namngivning (<code>ufw_block</code>, <code>ufw_allow</code>). Döpt om till <code>fw_block</code> / <code>fw_allow</code> i alla parsers och tester för att reflektera att verktyget stöder flera brandväggar.</td>
+</tr>
+<tr>
+  <td><code>chainwatch.py</code> — portscan-tröskel</td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td>En ensam blockerad anslutning triggade <code>portscan_then_login</code>. Fixat med krav på ≥ 2 distinkta destinationsportar (<code>distinct_ports</code>) för att filtrera ut normalt bakgrundsbrus.</td>
+</tr>
+<tr>
+  <td><code>chainwatch.py</code> — lateral_movement sudo</td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td><code>lateral_movement</code> kollade bara <code>auditd execve</code>-events. Lagt till <code>sudo_usage</code>-events från <code>auth.log</code> med korrekt svårighetsgrad: <code>critical</code> vid sudo till root, <code>high</code> vid sudo till annan användare.</td>
+</tr>
+</tbody></table>
+
+<h3>Buggar hittade vid kodgranskning</h3>
+<table><thead><tr><th>Fil</th><th>Status</th><th>Beskrivning</th></tr></thead><tbody>
+<tr>
+  <td><code>chainwatch.py</code> — IPv6 i <code>_NETFILTER_SRC</code></td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td>Regex <code>_NETFILTER_SRC</code> matchade inte versaler i IPv6-adresser (<code>FE80::1</code>). Lade till <code>A-F</code> i teckenklassen. Två nya tester: <code>test_ufw_block_ipv6_uppercase</code> och <code>test_ufw_block_ipv6_lowercase</code>.</td>
+</tr>
+<tr>
+  <td><code>chainwatch.py</code> — <code>--since</code>/<code>--until</code>-ordning</td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td>Om <code>--since</code> var senare än <code>--until</code> gav verktyget inga fel och returnerade tomma resultat i tysthet. Lagt till validering med tydligt felmeddelande och <code>sys.exit(1)</code>.</td>
+</tr>
+<tr>
+  <td><code>chainwatch.py</code> — minnesläcka i follow-läge</td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td><code>seen_incidents</code>-setet i <code>_follow_mode()</code> växte obegränsat vid långvarig körning. Fixat med rensning varje iteration: behåll bara incidenter nyare än <code>now - 2 × window</code>.</td>
+</tr>
+</tbody></table>
+
+<h3>Timestamp-bugg: år vid årsskifte</h3>
+<table><thead><tr><th>Fil</th><th>Status</th><th>Beskrivning</th></tr></thead><tbody>
+<tr>
+  <td><code>chainwatch.py</code> — <code>_parse_timestamp</code></td>
+  <td><span class="badge fix">FIXAD</span></td>
+  <td>Första försöket använde <code>if dt &gt; today:</code> vilket rollbackade tidsstämplar med <em>klockslag</em> senare än nuet (t.ex. 23:59:59 när klockan är 12:00) till föregående år. Fixat med <code>if dt.date() &gt; today.date():</code> för korrekt jämförelse enbart på datumdelen.</td>
+</tr>
+</tbody></table>
+</div>
+
+<h2>Nya funktioner</h2>
+<div class="section-block">
+
+<h3>--since / --until — tidsfiltrering</h3>
+<table><thead><tr><th>Komponent</th><th>Status</th><th>Detalj</th></tr></thead><tbody>
+<tr>
+  <td><code>_parse_time_arg()</code></td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td>Parsar fyra format: <code>HH:MM</code>, <code>HH:MM:SS</code>, <code>YYYY-MM-DD HH:MM</code>, <code>YYYY-MM-DD HH:MM:SS</code>. Returnerar <code>datetime</code>-objekt, <code>None</code> vid ogiltigt format.</td>
+</tr>
+<tr>
+  <td><code>_filter_events()</code></td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td>Filtrerar en lista events med valfria since/until-gränser. Events utan tidsstämpel passerar alltid igenom.</td>
+</tr>
+<tr>
+  <td>CLI-flaggor</td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td><code>--since TIME</code> och <code>--until TIME</code> lagda till i <code>argparse</code>. Ordningsvalidering: om since &gt; until avslutas programmet med felmeddelande.</td>
+</tr>
+</tbody></table>
+
+<h3>--follow — live-läge med loggrotation</h3>
+<table><thead><tr><th>Komponent</th><th>Status</th><th>Detalj</th></tr></thead><tbody>
+<tr>
+  <td><code>_print_follow_incident()</code></td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td>Skriver ut en enstaka incident i realtid med tidsstämpel, kedjtyp, svårighetsgrad och käll-IP.</td>
+</tr>
+<tr>
+  <td><code>_follow_mode()</code></td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td>Pollar alla tre loggkällor med konfigurerbart intervall (standard 5 s). Håller filposition per källa och läser enbart nya rader varje iteration. Stödjer <code>Ctrl+C</code> för ren avslutning.</td>
+</tr>
+<tr>
+  <td>Loggrotation</td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td>Detekterar rotation via <code>stat().st_size &lt; prev_size</code>. Vid rotation återställs positionen till 0 och hela den nya filen läses.</td>
+</tr>
+<tr>
+  <td>Minnesbegränsning</td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td><code>seen_incidents</code>-setet rensas varje iteration. Incidenter äldre än <code>2 × window</code> tas bort för att förhindra obegränsad tillväxt.</td>
+</tr>
+<tr>
+  <td>CLI-flaggor</td>
+  <td><span class="badge feat">KLAR</span></td>
+  <td><code>--follow</code> aktiverar live-läge. <code>--interval SECONDS</code> styr pollintervall (standard: 5 s).</td>
+</tr>
+</tbody></table>
+</div>
+
+<h2>Tester</h2>
+<div class="section-block">
+
+<h3>Nya testfiler</h3>
+<table><thead><tr><th>Fil</th><th>Status</th><th>Tester</th></tr></thead><tbody>
+<tr>
+  <td><code>tests/test_parse_timestamp.py</code></td>
+  <td><span class="badge test">NY</span></td>
+  <td>6 tester: normalt datum, december-i-januari-rollback, samma dag, klockslag-edge-case, explict _today-parameter, None-datum.</td>
+</tr>
+<tr>
+  <td><code>tests/test_time_filter.py</code></td>
+  <td><span class="badge test">NY</span></td>
+  <td>9 tester: alla fyra tidformat för <code>_parse_time_arg</code>, filtrering med since/until/båda/inget, event utan tidsstämpel passerar.</td>
+</tr>
+<tr>
+  <td><code>tests/test_follow_mode.py</code></td>
+  <td><span class="badge test">NY</span></td>
+  <td>5 tester med deterministisk <code>_controlled_follow()</code>-hjälpare som patchar <code>time.sleep</code>: brute force detekteras, portscan detekteras, befintligt innehåll hoppas över, loggrotation hanteras, saknad fil hanteras.</td>
+</tr>
+</tbody></table>
+
+<h3>Utökning av befintliga testfiler</h3>
+<table><thead><tr><th>Fil</th><th>Status</th><th>Tillagda tester</th></tr></thead><tbody>
+<tr>
+  <td><code>tests/test_correlate.py</code></td>
+  <td><span class="badge test">UPPDATERAD</span></td>
+  <td>7 nya tester: enporten blockeras ej som scan, tvåportar triggar scan, sudo-till-root är critical, sudo-till-icke-root är high, sudo utanför fönster länkas ej, sudo för fel användare länkas ej, sudo och execve kombinerat.</td>
+</tr>
+<tr>
+  <td><code>tests/test_parse_firewall_log.py</code></td>
+  <td><span class="badge test">UPPDATERAD</span></td>
+  <td>2 nya tester: IPv6 med versaler, IPv6 med gemener. Alla <code>ufw_block</code>/<code>ufw_allow</code> uppdaterade till <code>fw_block</code>/<code>fw_allow</code>.</td>
+</tr>
+</tbody></table>
+
+<div class="note-box">
+  <span class="note-label">Obs:</span>
+  Follow-mode-tester använde initialt trådar med riktiga sleeps vilket gav race conditions. Ersatt med en <code>_controlled_follow()</code>-hjälpare som exekverar en åtgärdslista deterministiskt vid varje <code>time.sleep</code>-anrop — reproducerbara tester utan tidsberoenden.
+</div>
+</div>
+
+<h2>Infrastruktur</h2>
+<div class="section-block">
+
+<h3>Licens och versionshantering</h3>
+<table><thead><tr><th>Komponent</th><th>Status</th><th>Detalj</th></tr></thead><tbody>
+<tr>
+  <td><code>LICENSE</code></td>
+  <td><span class="badge infra">TILLAGD</span></td>
+  <td>MIT-licens, © 2026 Elin Olsson. Banner och logotyp undantagna från MIT-licensen (alla rättigheter förbehållna).</td>
+</tr>
+<tr>
+  <td>Git-taggar och releases</td>
+  <td><span class="badge infra">TILLAGD</span></td>
+  <td><code>v0.1.0</code> — retroaktiv tagg för ursprunglig commit med grundläggande funktionalitet. <code>v1.0.0</code> — nuvarande release med alla features, tester och infrastruktur. Båda publicerade som GitHub Releases med release notes.</td>
+</tr>
+<tr>
+  <td><code>__version__ = "1.0.0"</code></td>
+  <td><span class="badge infra">TILLAGD</span></td>
+  <td>Versionssträng i <code>chainwatch.py</code>. <code>--version</code>-flagga exponerar versionen via CLI.</td>
+</tr>
+</tbody></table>
+
+<h3>GitHub-infrastruktur</h3>
+<table><thead><tr><th>Komponent</th><th>Status</th><th>Detalj</th></tr></thead><tbody>
+<tr>
+  <td><code>.github/workflows/ci.yml</code></td>
+  <td><span class="badge infra">TILLAGD</span></td>
+  <td>GitHub Actions CI som kör <code>pytest</code> på Python 3.10, 3.11 och 3.12 vid varje push och pull request mot main.</td>
+</tr>
+<tr>
+  <td>Issue templates</td>
+  <td><span class="badge infra">TILLAGD</span></td>
+  <td><code>.github/ISSUE_TEMPLATE/bug_report.md</code> och <code>feature_request.md</code> — strukturerade mallar för buggrapporter och funktionsönskemål.</td>
+</tr>
+<tr>
+  <td><code>.github/dependabot.yml</code></td>
+  <td><span class="badge infra">TILLAGD</span></td>
+  <td>Dependabot konfigurerat för veckovisa pip-uppdateringar.</td>
+</tr>
+<tr>
+  <td>Grensskydd</td>
+  <td><span class="badge infra">EJ TILLAGD</span></td>
+  <td>Kräver publikt repo eller GitHub Pro. chain-watch är privat — grensskydd kan aktiveras om repot görs publikt.
+    <div class="note-box"><span class="note-label">Obs:</span> Grensskydd tillämpades framgångsrikt på ssh-tls-auditor (publikt repo).</div>
+  </td>
+</tr>
+</tbody></table>
+</div>
+
+<h2>Dokumentation</h2>
+<div class="section-block">
+
+<h3>README.md</h3>
+<table><thead><tr><th>Avsnitt</th><th>Status</th><th>Förändring</th></tr></thead><tbody>
+<tr>
+  <td>Badges</td>
+  <td><span class="badge done">UPPDATERAD</span></td>
+  <td>MIT-badge och CI-badge tillagda överst, matchar ssh-tls-auditor i stil.</td>
+</tr>
+<tr>
+  <td>Användningsexempel</td>
+  <td><span class="badge done">UPPDATERAD</span></td>
+  <td>Exempel för <code>--since</code>, <code>--until</code>, <code>--follow</code> och <code>--interval</code> tillagda.</td>
+</tr>
+<tr>
+  <td>Flaggtabell</td>
+  <td><span class="badge done">UPPDATERAD</span></td>
+  <td>Alla nya flaggor dokumenterade: <code>--since</code>, <code>--until</code>, <code>--follow</code>, <code>--interval</code>.</td>
+</tr>
+<tr>
+  <td>Detekterade kedjor</td>
+  <td><span class="badge done">UPPDATERAD</span></td>
+  <td><code>portscan_then_login</code>: krav på ≥ 2 distinkta portar dokumenterat. <code>lateral_movement</code>: sudo-händelser inkluderade och svårighetsgradering beskriven.</td>
+</tr>
+<tr>
+  <td>Stödda brandväggar</td>
+  <td><span class="badge done">NY SEKTION</span></td>
+  <td>Tabell med UFW, firewalld, iptables och nftables med detekterade format.</td>
+</tr>
+<tr>
+  <td>Footer</td>
+  <td><span class="badge done">UPPDATERAD</span></td>
+  <td>Strukturerad med <code>---</code>, centrerad logotyp (width=200) och copyright-text — matchar ssh-tls-auditor exakt.</td>
+</tr>
+</tbody></table>
+</div>
+
+<h2>Visuell och strukturell konsistens med ssh-tls-auditor</h2>
+<div class="section-block">
+
+<h3>Ändringar för att matcha systerrepot</h3>
+<table><thead><tr><th>Område</th><th>Status</th><th>Detalj</th></tr></thead><tbody>
+<tr>
+  <td>README badges</td>
+  <td><span class="badge done">SYNKAD</span></td>
+  <td>Båda repona har nu MIT-badge och CI-badge i samma ordning överst i README.</td>
+</tr>
+<tr>
+  <td>README footer</td>
+  <td><span class="badge done">SYNKAD</span></td>
+  <td>Båda använder <code>---</code> separator, centrerad logotyp med width=200, copyright-text i <code>&lt;sub&gt;</code>-element.</td>
+</tr>
+<tr>
+  <td>GitHub-infrastruktur</td>
+  <td><span class="badge done">SYNKAD</span></td>
+  <td>Båda repona har CI-workflow, issue templates, dependabot och versionstaggar.</td>
+</tr>
+<tr>
+  <td>ssh-tls-auditor README</td>
+  <td><span class="badge done">UPPDATERAD</span></td>
+  <td>MIT-badge och CI-badge tillagda i ssh-tls-auditor README för att matcha chain-watch.</td>
+</tr>
+</tbody></table>
+</div>
+
+<h2>Nästa steg</h2>
+<div class="section-block">
+<table><thead><tr><th>Prioritet</th><th>Feature</th><th>Beskrivning</th></tr></thead><tbody>
+<tr>
+  <td><span class="badge fix">HÖG</span></td>
+  <td>journald-stöd</td>
+  <td>Stöd för <code>journalctl</code>-output som loggkälla. Många moderna Linux-system (Fedora, Ubuntu 22.04+) loggar inte längre till platta textfiler. Detta är den viktigaste saknade loggkällan.</td>
+</tr>
+<tr>
+  <td><span class="badge feat">MEDEL</span></td>
+  <td>IP-ryktesuppslag</td>
+  <td>Integrera med AbuseIPDB eller liknande för att flagga kända angripares IP-adresser direkt i rapporten.</td>
+</tr>
+<tr>
+  <td><span class="badge feat">MEDEL</span></td>
+  <td>Notifieringar i --follow</td>
+  <td>Webhook- eller e-postnotifieringar när nya incidenter detekteras i live-läge.</td>
+</tr>
+</tbody></table>
+</div>
+
+</body>
+</html>
