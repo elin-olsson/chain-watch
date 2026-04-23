@@ -236,10 +236,6 @@ python -m pytest tests/
 ---
 
 <p align="center">
-  <img src="logo.png" alt="chain-watch logo" width="200">
-</p>
-
-<p align="center">
   <img src="nyloggac-w.png" alt="chain-watch ny logga">
 </p>
 
