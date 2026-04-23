@@ -240,5 +240,9 @@ python -m pytest tests/
 </p>
 
 <p align="center">
+  <img src="nyloggac-w.png" alt="chain-watch ny logga">
+</p>
+
+<p align="center">
   <sub>The banner and logo are &copy; 2026 Elin Olsson — all rights reserved, not covered by the MIT license.</sub>
 </p>
