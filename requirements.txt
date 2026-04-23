@@ -1,4 +1,4 @@
 # Runtime: no third-party dependencies (stdlib only)
 
 # Development / testing
-pytest>=8.0
+pytest>=9.0.3
