@@ -1,4 +1,4 @@
-![chain-watch banner](banner.png)
+![chain-watch banner](nybannerc-w.png)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml)
 
@@ -271,5 +271,5 @@ python -m pytest tests/
 </p>
 
 <p align="center">
-  <sub>The banner and logo are &copy; 2026 Elin Olsson — all rights reserved, not covered by the MIT license.</sub>
+  <sub>The banner and logo are &copy; 2026 shadowfox.se — all rights reserved, not covered by the MIT license.</sub>
 </p>
