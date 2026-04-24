@@ -233,6 +233,62 @@ def test_lateral_movement_sudo_after_window_not_linked():
     assert incidents == []
 
 
+# ── credential_stuffing ───────────────────────────────────────────────────────
+
+def test_credential_stuffing_five_unique_users():
+    users = ["alice", "bob", "carol", "dave", "eve"]
+    auth = [fail("5.5.5.5", i * 10, user=u) for i, u in enumerate(users)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    stuffing = [inc for inc in incidents if inc["chain_type"] == "credential_stuffing"]
+    assert len(stuffing) == 1
+    assert stuffing[0]["source_ip"] == "5.5.5.5"
+    assert stuffing[0]["severity"] == "high"
+
+
+def test_credential_stuffing_four_unique_users_no_incident():
+    users = ["alice", "bob", "carol", "dave"]
+    auth = [fail("5.5.5.5", i * 10, user=u) for i, u in enumerate(users)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    stuffing = [inc for inc in incidents if inc["chain_type"] == "credential_stuffing"]
+    assert stuffing == []
+
+
+def test_credential_stuffing_repeated_users_not_stuffing():
+    # 10 attempts but only 2 unique users — brute_force, not stuffing
+    auth = [fail("5.5.5.5", i * 10, user="root" if i % 2 == 0 else "admin")
+            for i in range(10)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    stuffing = [inc for inc in incidents if inc["chain_type"] == "credential_stuffing"]
+    assert stuffing == []
+
+
+def test_credential_stuffing_outside_window_no_incident():
+    users = ["alice", "bob", "carol", "dave", "eve"]
+    # Each attempt > 600s apart
+    auth = [fail("5.5.5.5", i * 700, user=u) for i, u in enumerate(users)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    stuffing = [inc for inc in incidents if inc["chain_type"] == "credential_stuffing"]
+    assert stuffing == []
+
+
+def test_credential_stuffing_coexists_with_brute_force():
+    # 5 unique users = stuffing; also ≥5 total attempts = brute_force
+    users = ["alice", "bob", "carol", "dave", "eve"]
+    auth = [fail("5.5.5.5", i * 10, user=u) for i, u in enumerate(users)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    types = {inc["chain_type"] for inc in incidents}
+    assert "credential_stuffing" in types
+    assert "brute_force" in types
+
+
+def test_credential_stuffing_all_events_included():
+    users = ["alice", "bob", "carol", "dave", "eve"]
+    auth = [fail("5.5.5.5", i * 10, user=u) for i, u in enumerate(users)]
+    incidents = correlate_events(auth, [], [], window_seconds=600)
+    stuffing = [inc for inc in incidents if inc["chain_type"] == "credential_stuffing"][0]
+    assert len(stuffing["events"]) == 5
+
+
 def test_lateral_movement_sudo_different_user_not_linked():
     auth = [ok("10.0.0.1", "alice", 0), sudo("bob", "root", "/bin/bash", 30)]
     incidents = correlate_events(auth, [], [], window_seconds=600)

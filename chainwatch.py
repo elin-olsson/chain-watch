@@ -558,7 +558,8 @@ def parse_audit_log(log_path: str | None = None) -> list[dict]:
 
 # --- correlation constants ---
 
-_BRUTE_THRESHOLD = 5  # failed logins needed to declare brute_force
+_BRUTE_THRESHOLD = 5               # failed logins needed to declare brute_force
+_STUFFING_USER_THRESHOLD = 5       # unique usernames needed to declare credential_stuffing
 
 # Commands that, when run shortly after an SSH login, indicate post-exploitation
 _SUSPICIOUS_BINS = frozenset({"wget", "curl", "nc", "ncat", "netcat", "bash", "sh"})
@@ -590,10 +591,11 @@ def correlate_events(
 
     Detected chains
     ---------------
-    brute_force       — ≥5 failed_login from the same IP within the time window
-    brute_then_login — brute_force cluster immediately followed by a successful_login
-    portscan_then_login    — ufw_block(s) from an IP preceding a login attempt from that IP
-    lateral_movement  — successful_login followed by suspicious execve by the same user
+    brute_force          — ≥5 failed_login from the same IP within the time window
+    brute_then_login     — brute_force cluster immediately followed by a successful_login
+    portscan_then_login  — ufw_block(s) from an IP preceding a login attempt from that IP
+    lateral_movement     — successful_login followed by suspicious execve by the same user
+    credential_stuffing  — ≥5 distinct usernames tried from the same IP within the window
 
     Returns a list of incident dicts sorted by start_time.
     """
@@ -761,6 +763,27 @@ def correlate_events(
             "end_time": max(e["timestamp"] for e in follow_all),
             "severity": severity,
         })
+
+    # ── 5: credential_stuffing ────────────────────────────────────────────────
+    for ip, fails in fails_by_ip.items():
+        i = 0
+        while i < len(fails):
+            t0 = fails[i]["timestamp"]
+            j = i
+            while j < len(fails) and (fails[j]["timestamp"] - t0) <= window:
+                j += 1
+            cluster = fails[i:j]
+            unique_users = {e.get("user", "") for e in cluster if e.get("user")}
+            if len(unique_users) >= _STUFFING_USER_THRESHOLD:
+                incidents.append({
+                    "chain_type": "credential_stuffing",
+                    "source_ip": ip,
+                    "events": cluster,
+                    "start_time": cluster[0]["timestamp"],
+                    "end_time": cluster[-1]["timestamp"],
+                    "severity": "high",
+                })
+            i = j if j > i else i + 1
 
     incidents.sort(key=lambda inc: inc["start_time"])
 
