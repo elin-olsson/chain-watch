@@ -4,7 +4,7 @@
 
 A Python CLI security log correlator for Linux systems.
 
-Reads multiple log sources simultaneously — `auth.log`, UFW/firewalld logs, and `auditd` — and correlates events by source IP and time window to detect multi-stage attack chains: port scans followed by brute-force, brute-force followed by successful login, and post-login lateral movement.
+Reads multiple log sources simultaneously — `auth.log`, UFW/firewalld logs, `auditd`, and the systemd journal — and correlates events by source IP and time window to detect multi-stage attack chains: port scans followed by brute-force, brute-force followed by successful login, and post-login lateral movement.
 
 ## Prerequisites
 
@@ -58,6 +58,11 @@ sudo python3 chainwatch.py --since "2026-04-21 00:00"
 sudo python3 chainwatch.py --follow
 sudo python3 chainwatch.py --follow --interval 10
 
+# Read from the systemd journal (useful on Fedora/RHEL/Arch)
+sudo python3 chainwatch.py --journal
+sudo python3 chainwatch.py --journal --since 06:00
+sudo python3 chainwatch.py --journal --follow
+
 # Write results to an HTML report
 sudo python3 chainwatch.py --html report.html
 
@@ -84,6 +89,7 @@ sudo python3 chainwatch.py \
 | `--window SECONDS` | Correlation time window in seconds (default: 600) |
 | `--since TIME` | Ignore events before TIME (`HH:MM`, `HH:MM:SS`, or `YYYY-MM-DD HH:MM[:SS]`) |
 | `--until TIME` | Ignore events after TIME (same formats as `--since`) |
+| `--journal` | Read from the systemd journal via `journalctl` (merged with file sources) |
 | `--follow` | Watch log files and alert on new incidents in real time |
 | `--interval SECONDS` | Poll interval for `--follow` mode in seconds (default: 5) |
 | `--json FILE` | Write JSON report to FILE |
@@ -99,8 +105,11 @@ sudo python3 chainwatch.py \
 | auth.log / secure | `/var/log/auth.log`, `/var/log/secure` | SSH brute-force, successful logins, sudo usage |
 | Firewall log | `/var/log/ufw.log`, `/var/log/kern.log`, `/var/log/messages` | Blocked/allowed packets with source IP and port |
 | auditd | `/var/log/audit/audit.log` | execve syscalls, user additions/deletions, PAM auth events |
+| systemd journal | `journalctl` (via `--journal`) | SSH logins, sudo usage, kernel firewall events |
 
 chain-watch automatically searches the default paths when no explicit path is given. All parsers handle missing or unreadable files gracefully — if a log source is not present, that source is silently skipped.
+
+The `--journal` flag reads from the systemd journal using `journalctl` and merges the results with any file-based sources. It is particularly useful on systemd-based distributions (Fedora, Arch, recent Ubuntu) where logs are primarily stored in the journal rather than plain text files. Combine with `--since` to limit the query to a specific time range and avoid reading the full journal history.
 
 ## Detected attack chains
 
