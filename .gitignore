@@ -18,7 +18,6 @@ dist/
 build/
 *.egg-info/
 
-# Generated reports (keep samples out of the repo)
+# Generated reports — keep out of the repo
 *.html
-!rapport_*.html
 *.json
