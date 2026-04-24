@@ -127,12 +127,20 @@ Firewall block events across at least two distinct destination ports from an IP,
 **lateral_movement** `[high / critical]`  
 A successful login followed by a suspicious execve (via auditd) or a `sudo` invocation (via auth.log) by the same user within the window. Correlated by user identity, not IP — events are linked back to the IP of the preceding SSH session. Severity is `critical` for network tools (`wget`, `curl`, `nc`, `ncat`, `netcat`) or `sudo` to root, and `high` for shell spawning (`bash`, `sh`) or `sudo` to any other user.
 
+**credential_stuffing** `[high]`  
+Five or more distinct usernames attempted from the same source IP within the time window. Unlike brute_force (which focuses on attempt volume), credential stuffing targets breadth — trying many different accounts with one or few attempts each, typical of attacks using leaked credential databases. Both chains can fire independently for the same IP.
+
+**account_manipulation** `[critical]`  
+A successful login followed by a user account creation (`ADD_USER`) or deletion (`DEL_USER`) by the same user within the window, detected via auditd. A strong indicator of post-compromise activity — creating a backdoor account or removing legitimate users to lock out administrators.
+
 | Chain | Severity | Trigger |
 |---|---|---|
 | `brute_force` | medium | ≥ 5 failed logins from the same IP in the window |
 | `brute_then_login` | critical | brute_force cluster + successful login from same IP in window |
 | `portscan_then_login` | high | firewall blocks + login attempt from same IP in window |
 | `lateral_movement` | high / critical | successful login + suspicious execve by same user in window |
+| `credential_stuffing` | high | ≥ 5 distinct usernames tried from the same IP in the window |
+| `account_manipulation` | critical | successful login + ADD_USER or DEL_USER by same user in window |
 
 ## Supported firewalls
 
