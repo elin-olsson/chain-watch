@@ -1157,6 +1157,7 @@ def _follow_mode(
     audit_path: str | None,
     window_seconds: int,
     poll_interval: int,
+    use_journal: bool = False,
 ) -> None:
     monitored = [
         (auth_path,  "auth"),
@@ -1176,10 +1177,10 @@ def _follow_mode(
     event_buffer: list[dict] = []
     seen_incidents: set[tuple] = set()
     window = timedelta(seconds=window_seconds)
+    journal_since = datetime.now()
 
     print(_c(f"Following logs (poll every {poll_interval}s, window {window_seconds}s)… "
              "Ctrl+C to stop.", _ANSI_DIM))
-
     try:
         while True:
             time.sleep(poll_interval)
@@ -1217,6 +1218,27 @@ def _follow_mode(
                 if new_events:
                     event_buffer.extend(new_events)
                     got_new = True
+
+            if use_journal:
+                poll_until = datetime.now()
+                cmd = [
+                    "journalctl", "-o", "json", "--no-pager",
+                    "--since", journal_since.strftime("%Y-%m-%d %H:%M:%S"),
+                    "--until", poll_until.strftime("%Y-%m-%d %H:%M:%S"),
+                ]
+                try:
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True,
+                        errors="replace", timeout=30,
+                    )
+                    j_auth, j_fw = _parse_journal_lines(result.stdout.splitlines())
+                    if j_auth or j_fw:
+                        event_buffer.extend(j_auth)
+                        event_buffer.extend(j_fw)
+                        got_new = True
+                except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired):
+                    pass
+                journal_since = poll_until
 
             if not got_new:
                 continue
@@ -1358,7 +1380,7 @@ examples:
     )
 
     if args.follow:
-        _follow_mode(auth_path, ufw_path, audit_path, args.window, args.interval)
+        _follow_mode(auth_path, ufw_path, audit_path, args.window, args.interval, args.journal)
         return
 
     print(_c("Parsing logs…", _ANSI_DIM))
