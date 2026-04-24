@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 # ANSI colour codes — applied only when stdout is a real TTY
 _ANSI_RED    = "\033[31m"
