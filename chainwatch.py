@@ -669,7 +669,7 @@ def correlate_events(
                 # Successful login from the same IP within one window after the cluster
                 follow_successes = [
                     e for e in success_by_ip.get(ip, [])
-                    if cluster_end <= e["timestamp"] <= cluster_end + window
+                    if t0 <= e["timestamp"] <= cluster_end + window
                 ]
                 if follow_successes:
                     incidents.append({
