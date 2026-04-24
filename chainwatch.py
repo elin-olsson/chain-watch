@@ -3,6 +3,7 @@ import html as html_module
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from collections import defaultdict
@@ -385,6 +386,139 @@ def parse_firewall_log(log_path: str | None = None) -> list[dict]:
 
 # Backward-compatible alias
 parse_ufw_log = parse_firewall_log
+
+
+# ── journald parser ───────────────────────────────────────────────────────────
+
+def _parse_journal_lines(lines: list[str]) -> tuple[list[dict], list[dict]]:
+    """
+    Parse journalctl -o json output.  Each line is a JSON object.
+    Returns (auth_events, fw_events) using the same event schema as the
+    file-based parsers so the output can be merged before correlation.
+    """
+    auth_events: list[dict] = []
+    fw_events:   list[dict] = []
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        ts_us = rec.get("__REALTIME_TIMESTAMP")
+        if not ts_us:
+            continue
+        try:
+            timestamp = datetime.fromtimestamp(int(ts_us) / 1_000_000)
+        except (ValueError, OSError):
+            continue
+
+        # MESSAGE is a string normally; a JSON byte-array when non-UTF-8
+        msg = rec.get("MESSAGE", "")
+        if isinstance(msg, list):
+            try:
+                msg = bytes(msg).decode("utf-8", errors="replace")
+            except (TypeError, ValueError):
+                msg = ""
+
+        identifier = rec.get("SYSLOG_IDENTIFIER", "")
+        hostname   = rec.get("_HOSTNAME", "")
+        base = {"timestamp": timestamp, "hostname": hostname,
+                "service": identifier, "message": msg}
+
+        if identifier == "sshd":
+            fm = _FAILED_SSH.search(msg)
+            if fm:
+                auth_events.append({**base, "event_type": "failed_login",
+                                    "user": fm.group(1), "source_ip": fm.group(2)})
+                continue
+            am = _ACCEPTED_SSH.search(msg)
+            if am:
+                auth_events.append({**base, "event_type": "successful_login",
+                                    "user": am.group(1), "source_ip": am.group(2)})
+                continue
+
+        if identifier == "sudo":
+            sm = _SUDO_CMD.match(msg)
+            if sm:
+                auth_events.append({**base, "event_type": "sudo_usage",
+                                    "user": sm.group(1), "target_user": sm.group(2),
+                                    "command": sm.group(3).strip()})
+                continue
+
+        if identifier == "kernel":
+            action = firewall = None
+            for pattern, act, fw_name in _FW_ACTION_PATTERNS:
+                if pattern.search(msg):
+                    action, firewall = act, fw_name
+                    break
+            if action is not None and _NETFILTER_SRC.search(msg):
+                kv = dict(_KV.findall(msg))
+                raw_dpt = kv.get("DPT")
+                dst_port = int(raw_dpt) if raw_dpt and raw_dpt.isdigit() else None
+                fw_events.append({
+                    **base,
+                    "event_type": "fw_block" if action == "BLOCK" else "fw_allow",
+                    "action": action, "firewall": firewall,
+                    "src_ip": kv.get("SRC", ""), "dst_ip": kv.get("DST", ""),
+                    "dst_port": dst_port, "protocol": kv.get("PROTO", ""),
+                })
+
+    return auth_events, fw_events
+
+
+def parse_journal_log(
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """
+    Query the systemd journal via journalctl and return (auth_events, fw_events).
+    Pass --since / --until to scope the query; without them the full journal is read.
+    """
+    cmd = ["journalctl", "-o", "json", "--no-pager"]
+    if since:
+        cmd += ["--since", since.strftime("%Y-%m-%d %H:%M:%S")]
+    if until:
+        cmd += ["--until", until.strftime("%Y-%m-%d %H:%M:%S")]
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace", timeout=120
+        )
+    except FileNotFoundError:
+        print("Error: journalctl not found — is this a systemd system?", file=sys.stderr)
+        return [], []
+    except PermissionError:
+        print("Error: permission denied running journalctl. Try running as root.",
+              file=sys.stderr)
+        return [], []
+
+    auth_events, fw_events = _parse_journal_lines(result.stdout.splitlines())
+
+    a_counts: dict[str, int] = {}
+    for ev in auth_events:
+        a_counts[ev["event_type"]] = a_counts.get(ev["event_type"], 0) + 1
+
+    print("Parsed systemd journal")
+    for et, n in sorted(a_counts.items()):
+        print(f"  {et + ':':<20} {n}")
+    if fw_events:
+        fw_name_counts: dict[str, int] = defaultdict(int)
+        for ev in fw_events:
+            fw_name_counts[ev["firewall"]] += 1
+        blocks = sum(1 for e in fw_events if e["event_type"] == "fw_block")
+        allows = sum(1 for e in fw_events if e["event_type"] == "fw_allow")
+        detail = "  (" + "  ".join(
+            f"{fw}: {n}" for fw, n in sorted(fw_name_counts.items())
+        ) + ")"
+        print(f"  fw_block: {blocks}  fw_allow: {allows}{detail}")
+    if not a_counts and not fw_events:
+        print("  (no matching events found)")
+
+    return auth_events, fw_events
 
 
 def parse_audit_log(log_path: str | None = None) -> list[dict]:
@@ -1158,6 +1292,8 @@ examples:
   sudo chainwatch --since "2026-04-21 00:00"   from a specific date/time
   sudo chainwatch --follow                     watch logs and alert in real time
   sudo chainwatch --follow --interval 10       poll every 10 seconds
+  sudo chainwatch --journal                    read from systemd journal
+  sudo chainwatch --journal --since 06:00      journal entries since 06:00
   sudo chainwatch --json out.json              write JSON report
   sudo chainwatch --html report.html           write HTML report
   chainwatch --auth-log auth.log.sample        test with a specific file
@@ -1201,6 +1337,13 @@ examples:
         help="ignore events after TIME (same formats as --since)",
     )
     parser.add_argument(
+        "--journal", action="store_true",
+        help=(
+            "read from systemd journal via journalctl "
+            "(merged with any file-based sources; use --since to limit scope)"
+        ),
+    )
+    parser.add_argument(
         "--json", metavar="FILE", dest="json_out",
         help="write JSON report to FILE",
     )
@@ -1222,6 +1365,14 @@ examples:
     auth_events  = parse_auth_log(auth_path)
     ufw_events   = parse_ufw_log(ufw_path)
     audit_events = parse_audit_log(audit_path)
+
+    if args.journal:
+        since_arg = getattr(args, "since", None)
+        until_arg = getattr(args, "until", None)
+        j_auth, j_fw = parse_journal_log(since=since_arg, until=until_arg)
+        auth_events = auth_events + j_auth
+        ufw_events  = ufw_events  + j_fw
+
     print()
 
     since = getattr(args, "since", None)
