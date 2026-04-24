@@ -495,6 +495,10 @@ def parse_journal_log(
         print("Error: permission denied running journalctl. Try running as root.",
               file=sys.stderr)
         return [], []
+    except subprocess.TimeoutExpired:
+        print("Error: journalctl timed out. Use --since to limit the query range.",
+              file=sys.stderr)
+        return [], []
 
     auth_events, fw_events = _parse_journal_lines(result.stdout.splitlines())
 
@@ -779,6 +783,58 @@ def correlate_events(
     return incidents
 
 
+# ── statistics ───────────────────────────────────────────────────────────────
+
+def _compute_stats(
+    auth_events: list[dict],
+    ufw_events:  list[dict],
+    audit_events: list[dict],
+    top_n: int = 10,
+) -> dict:
+    """
+    Compute summary statistics across all event sources.
+
+    Returns a dict with:
+      top_ips    — list of (ip, count) sorted descending, attack-source events only
+      top_ports  — list of (port, proto, count) from fw_block events, sorted descending
+      hourly     — dict {hour_int: count} for all events combined
+    """
+    ip_counts: dict[str, int] = defaultdict(int)
+    for ev in auth_events:
+        if ev["event_type"] == "failed_login":
+            if ip := _event_ip(ev):
+                ip_counts[ip] += 1
+    for ev in ufw_events:
+        if ev["event_type"] == "fw_block":
+            if ip := ev.get("src_ip", ""):
+                ip_counts[ip] += 1
+
+    port_counts: dict[tuple, int] = defaultdict(int)
+    for ev in ufw_events:
+        if ev["event_type"] == "fw_block" and ev.get("dst_port") is not None:
+            port_counts[(ev["dst_port"], ev.get("protocol", ""))] += 1
+
+    hourly: dict[int, int] = defaultdict(int)
+    for ev in auth_events + ufw_events + audit_events:
+        hourly[ev["timestamp"].hour] += 1
+
+    return {
+        "top_ips":   sorted(ip_counts.items(),   key=lambda x: x[1], reverse=True)[:top_n],
+        "top_ports": [
+            (port, proto, n)
+            for (port, proto), n in sorted(port_counts.items(), key=lambda x: x[1], reverse=True)
+        ][:top_n],
+        "hourly": dict(hourly),
+    }
+
+
+def _bar(value: int, max_value: int, width: int = 20) -> str:
+    if max_value == 0:
+        return ""
+    filled = round(value / max_value * width)
+    return "█" * filled
+
+
 # ── terminal report helpers ───────────────────────────────────────────────────
 
 _W = 62  # report width
@@ -838,6 +894,7 @@ def _print_terminal_report(
 ) -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     n_auth, n_ufw, n_aud = len(auth_events), len(ufw_events), len(audit_events)
+    stats = _compute_stats(auth_events, ufw_events, audit_events)
 
     print(_c(_rule("═"), _ANSI_BOLD))
     print(_c(f"  chain-watch  —  Attack Chain Correlation Report", _ANSI_BOLD))
@@ -847,6 +904,31 @@ def _print_terminal_report(
     print(f"  Parsed      {n_auth + n_ufw + n_aud} events"
           f"  ({n_auth} auth  ·  {n_ufw} ufw  ·  {n_aud} audit)")
     print(f"  Incidents   {len(incidents)}")
+
+    # ── statistics section ────────────────────────────────────────────────────
+    if stats["top_ips"]:
+        print()
+        print(_c("  Top attacking IPs", _ANSI_BOLD))
+        for ip, count in stats["top_ips"]:
+            print(f"    {ip:<20}  {count:>4} attempts  "
+                  f"{_bar(count, stats['top_ips'][0][1])}")
+
+    if stats["top_ports"]:
+        print()
+        print(_c("  Most targeted ports", _ANSI_BOLD))
+        max_port_count = stats["top_ports"][0][2]
+        for port, proto, count in stats["top_ports"]:
+            label = f"{port}/{proto}" if proto else str(port)
+            print(f"    {label:<12}  {count:>4} blocks  "
+                  f"{_bar(count, max_port_count)}")
+
+    if stats["hourly"]:
+        print()
+        print(_c("  Events per hour", _ANSI_BOLD))
+        max_h = max(stats["hourly"].values())
+        for hour in sorted(stats["hourly"]):
+            count = stats["hourly"][hour]
+            print(f"    {hour:02d}:00  {_bar(count, max_h):<20}  {count}")
 
     if not incidents:
         print()
@@ -894,6 +976,7 @@ def _write_json_report(
     audit_events: list[dict],
     window_seconds: int,
 ) -> None:
+    stats = _compute_stats(auth_events, ufw_events, audit_events)
     payload = {
         "generated": datetime.now().isoformat(),
         "window_seconds": window_seconds,
@@ -902,6 +985,12 @@ def _write_json_report(
             "ufw":   len(ufw_events),
             "audit": len(audit_events),
             "total": len(auth_events) + len(ufw_events) + len(audit_events),
+        },
+        "statistics": {
+            "top_ips":   [{"ip": ip, "count": n} for ip, n in stats["top_ips"]],
+            "top_ports": [{"port": p, "protocol": pr, "count": n}
+                          for p, pr, n in stats["top_ports"]],
+            "events_per_hour": {str(h): n for h, n in sorted(stats["hourly"].items())},
         },
         "incident_count": len(incidents),
         "incidents": [
@@ -970,6 +1059,19 @@ summary:hover { text-decoration: underline; }
 .ev-type { color: #1a3a5c; font-weight: 600; margin-right: 8px; min-width: 160px;
            display: inline-block; }
 .ev-detail { color: #444; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+              gap: 20px; margin-bottom: 28px; }
+.stats-panel { background: #fff; border-radius: 8px; padding: 16px 20px;
+               box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+.stats-panel h3 { font-size: 13px; font-weight: 600; color: #1a3a5c;
+                  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.stat-row { display: flex; align-items: center; gap: 8px;
+            font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
+.stat-row:last-child { border-bottom: none; }
+.stat-label { color: #333; min-width: 110px; font-family: monospace; }
+.stat-bar-wrap { flex: 1; background: #eef0f4; border-radius: 3px; height: 8px; }
+.stat-bar { background: #1a56b0; border-radius: 3px; height: 8px; }
+.stat-count { color: #666; min-width: 36px; text-align: right; }
 """
 
 
@@ -1034,6 +1136,8 @@ def _write_html_report(
  &nbsp;&middot;&nbsp; Parsed: {len(auth_events)} auth / {len(ufw_events)} ufw / {len(audit_events)} audit events</p>
 """]
 
+    stats = _compute_stats(auth_events, ufw_events, audit_events)
+
     # ── summary cards ──────────────────────────────────────────────────────────
     parts.append('<div class="summary-box">\n')
     parts.append(
@@ -1049,6 +1153,56 @@ def _write_html_report(
             f'<div class="label">{sev.capitalize()}</div></div>\n'
         )
     parts.append('</div>\n')
+
+    # ── statistics panels ─────────────────────────────────────────────────────
+    if stats["top_ips"] or stats["top_ports"] or stats["hourly"]:
+        parts.append('<h2>Statistics</h2>\n<div class="stats-grid">\n')
+
+        if stats["top_ips"]:
+            max_ip = stats["top_ips"][0][1]
+            parts.append('<div class="stats-panel"><h3>Top Attacking IPs</h3>\n')
+            for ip, count in stats["top_ips"]:
+                pct = round(count / max_ip * 100)
+                parts.append(
+                    f'<div class="stat-row">'
+                    f'<span class="stat-label">{e(ip)}</span>'
+                    f'<div class="stat-bar-wrap"><div class="stat-bar" style="width:{pct}%"></div></div>'
+                    f'<span class="stat-count">{count}</span>'
+                    f'</div>\n'
+                )
+            parts.append('</div>\n')
+
+        if stats["top_ports"]:
+            max_port = stats["top_ports"][0][2]
+            parts.append('<div class="stats-panel"><h3>Most Targeted Ports</h3>\n')
+            for port, proto, count in stats["top_ports"]:
+                label = f"{port}/{proto}" if proto else str(port)
+                pct = round(count / max_port * 100)
+                parts.append(
+                    f'<div class="stat-row">'
+                    f'<span class="stat-label">{e(label)}</span>'
+                    f'<div class="stat-bar-wrap"><div class="stat-bar" style="width:{pct}%"></div></div>'
+                    f'<span class="stat-count">{count}</span>'
+                    f'</div>\n'
+                )
+            parts.append('</div>\n')
+
+        if stats["hourly"]:
+            max_h = max(stats["hourly"].values())
+            parts.append('<div class="stats-panel"><h3>Events per Hour</h3>\n')
+            for hour in sorted(stats["hourly"]):
+                count = stats["hourly"][hour]
+                pct = round(count / max_h * 100)
+                parts.append(
+                    f'<div class="stat-row">'
+                    f'<span class="stat-label">{hour:02d}:00</span>'
+                    f'<div class="stat-bar-wrap"><div class="stat-bar" style="width:{pct}%"></div></div>'
+                    f'<span class="stat-count">{count}</span>'
+                    f'</div>\n'
+                )
+            parts.append('</div>\n')
+
+        parts.append('</div>\n')  # end stats-grid
 
     if not incidents:
         parts.append('<p style="color:#666;">No attack chains detected.</p>\n')
@@ -1391,6 +1545,9 @@ examples:
     if args.journal:
         since_arg = getattr(args, "since", None)
         until_arg = getattr(args, "until", None)
+        # Without --since, cap at 24 h to avoid reading the full journal
+        if since_arg is None:
+            since_arg = datetime.now() - timedelta(hours=24)
         j_auth, j_fw = parse_journal_log(since=since_arg, until=until_arg)
         auth_events = auth_events + j_auth
         ufw_events  = ufw_events  + j_fw
