@@ -596,6 +596,7 @@ def correlate_events(
     portscan_then_login  — ufw_block(s) from an IP preceding a login attempt from that IP
     lateral_movement     — successful_login followed by suspicious execve by the same user
     credential_stuffing  — ≥5 distinct usernames tried from the same IP within the window
+    account_manipulation — successful_login followed by ADD_USER or DEL_USER by the same user
 
     Returns a list of incident dicts sorted by start_time.
     """
@@ -764,7 +765,37 @@ def correlate_events(
             "severity": severity,
         })
 
-    # ── 5: credential_stuffing ────────────────────────────────────────────────
+    # ── 5: account_manipulation ──────────────────────────────────────────────
+    acct_events_by_user: dict[str, list[dict]] = defaultdict(list)
+    for ev in audit_events:
+        if ev["event_type"] in ("add_user", "del_user"):
+            if user := ev.get("user", ""):
+                acct_events_by_user[user].append(ev)
+
+    for login in successful_logins:
+        login_user = login.get("user", "")
+        if not login_user:
+            continue
+        login_time = login["timestamp"]
+
+        follow_acct = [
+            e for e in acct_events_by_user.get(login_user, [])
+            if timedelta(0) <= e["timestamp"] - login_time <= window
+        ]
+        if not follow_acct:
+            continue
+
+        follow_acct_sorted = sorted(follow_acct, key=lambda e: e["timestamp"])
+        incidents.append({
+            "chain_type": "account_manipulation",
+            "source_ip": _event_ip(login),
+            "events": [login] + follow_acct_sorted,
+            "start_time": login_time,
+            "end_time": follow_acct_sorted[-1]["timestamp"],
+            "severity": "critical",
+        })
+
+    # ── 6: credential_stuffing ────────────────────────────────────────────────
     for ip, fails in fails_by_ip.items():
         i = 0
         while i < len(fails):

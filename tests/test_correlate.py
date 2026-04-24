@@ -233,6 +233,70 @@ def test_lateral_movement_sudo_after_window_not_linked():
     assert incidents == []
 
 
+# ── account_manipulation ─────────────────────────────────────────────────────
+
+def add_user(actor, target, s):
+    return {"event_type": "add_user", "user": actor, "target_user": target,
+            "pid": "1", "result": "success", "command": None, "timestamp": ts(s)}
+
+
+def del_user(actor, target, s):
+    return {"event_type": "del_user", "user": actor, "target_user": target,
+            "pid": "1", "result": "success", "command": None, "timestamp": ts(s)}
+
+
+def test_account_manipulation_add_user_critical():
+    auth = [ok("10.0.0.1", "alice", 0)]
+    aud  = [add_user("alice", "backdoor", 60)]
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    manip = [inc for inc in incidents if inc["chain_type"] == "account_manipulation"]
+    assert len(manip) == 1
+    assert manip[0]["severity"] == "critical"
+    assert manip[0]["source_ip"] == "10.0.0.1"
+
+
+def test_account_manipulation_del_user_critical():
+    auth = [ok("10.0.0.1", "alice", 0)]
+    aud  = [del_user("alice", "admin", 120)]
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    manip = [inc for inc in incidents if inc["chain_type"] == "account_manipulation"]
+    assert len(manip) == 1
+    assert manip[0]["severity"] == "critical"
+
+
+def test_account_manipulation_before_login_not_linked():
+    auth = [ok("10.0.0.1", "alice", 200)]
+    aud  = [add_user("alice", "backdoor", 100)]  # before login
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    manip = [inc for inc in incidents if inc["chain_type"] == "account_manipulation"]
+    assert manip == []
+
+
+def test_account_manipulation_after_window_not_linked():
+    auth = [ok("10.0.0.1", "alice", 0)]
+    aud  = [add_user("alice", "backdoor", 601)]  # just outside window
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    manip = [inc for inc in incidents if inc["chain_type"] == "account_manipulation"]
+    assert manip == []
+
+
+def test_account_manipulation_different_user_not_linked():
+    auth = [ok("10.0.0.1", "alice", 0)]
+    aud  = [add_user("root", "backdoor", 60)]  # different user ran the command
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    manip = [inc for inc in incidents if inc["chain_type"] == "account_manipulation"]
+    assert manip == []
+
+
+def test_account_manipulation_all_events_included():
+    auth = [ok("10.0.0.1", "alice", 0)]
+    aud  = [add_user("alice", "backdoor", 60), del_user("alice", "admin", 120)]
+    incidents = correlate_events(auth, [], aud, window_seconds=600)
+    manip = [inc for inc in incidents if inc["chain_type"] == "account_manipulation"]
+    assert len(manip) == 1
+    assert len(manip[0]["events"]) == 3  # login + add + del
+
+
 # ── credential_stuffing ───────────────────────────────────────────────────────
 
 def test_credential_stuffing_five_unique_users():
