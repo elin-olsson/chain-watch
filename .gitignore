@@ -21,3 +21,9 @@ build/
 # Generated reports — keep out of the repo
 *.html
 *.json
+
+# Editor / tool directories
+.DS_Store
+.idea/
+.vscode/
+.claude/

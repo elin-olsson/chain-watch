@@ -1,4 +1,4 @@
-![chain-watch banner](nybannerc-w.png)
+![chain-watch banner](banner.png)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml)
 
@@ -267,7 +267,7 @@ python -m pytest tests/
 ---
 
 <p align="center">
-  <img src="nyloggac-w.png" alt="chain-watch ny logga">
+  <img src="logo.png" alt="chain-watch logo" width="200">
 </p>
 
 <p align="center">
