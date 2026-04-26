@@ -1068,64 +1068,185 @@ def _write_json_report(
 
 # ── HTML export ───────────────────────────────────────────────────────────────
 
+_CW_TIMELINE_JS = """
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+(function () {
+  var INCIDENTS = __INCIDENTS_JSON__;
+  var SEV_COLORS = { critical: "#ff4d4d", high: "#ff9800", medium: "#2196f3", low: "#40ffaa" };
+  var ROW_H = 38;
+  var M     = { top: 14, right: 30, bottom: 36, left: 18 };
+  var wrap  = document.getElementById("cw-wrap");
+  var W     = wrap.clientWidth || 900;
+  var IW    = W - M.left - M.right;
+  var IH    = Math.max(1, INCIDENTS.length) * ROW_H;
+  var H     = IH + M.top + M.bottom;
+  var parseFn = d3.timeParse("%Y-%m-%dT%H:%M:%S");
+  var data = INCIDENTS.map(function (d) {
+    return { i: d.i, chain_type: d.chain_type, source_ip: d.source_ip,
+             severity: d.severity, event_count: d.event_count,
+             t0: parseFn(d.start), t1: parseFn(d.end) };
+  }).filter(function (d) { return d.t0 && d.t1; });
+  var svg = d3.select("#cw-svg").attr("width", W).attr("height", H);
+  if (!data.length) {
+    svg.append("text").attr("x", W / 2).attr("y", H / 2)
+       .attr("text-anchor", "middle").attr("fill", "#5a6b7a").attr("font-size", 13)
+       .text("No incidents to display.");
+    return;
+  }
+  var ext = [d3.min(data, function (d) { return d.t0; }),
+             d3.max(data, function (d) { return d.t1; })];
+  var pad = Math.max((ext[1] - ext[0]) * 0.04, 5000);
+  var x0  = d3.scaleTime()
+    .domain([new Date(ext[0].getTime() - pad), new Date(ext[1].getTime() + pad)])
+    .range([0, IW]);
+  svg.append("defs").append("clipPath").attr("id", "cw-clip")
+     .append("rect").attr("width", IW).attr("height", IH + 4);
+  var g     = svg.append("g").attr("transform", "translate(" + M.left + "," + M.top + ")");
+  var barsG = g.append("g").attr("clip-path", "url(#cw-clip)");
+  data.forEach(function (d, i) {
+    g.append("rect").attr("x", 0).attr("y", i * ROW_H)
+     .attr("width", IW).attr("height", ROW_H)
+     .attr("fill", i % 2 === 0 ? "#08141f" : "#0d141b");
+  });
+  var xAxisG  = g.append("g").attr("transform", "translate(0," + IH + ")");
+  var xAxisFn = d3.axisBottom(x0).ticks(6).tickFormat(d3.timeFormat("%H:%M:%S"));
+  function styleAxis(ag, scale) {
+    ag.call(xAxisFn.scale(scale));
+    ag.selectAll("text").attr("fill", "#5a6b7a").attr("font-size", 10);
+    ag.selectAll(".domain, line").attr("stroke", "#1a2a3a");
+  }
+  styleAxis(xAxisG, x0);
+  var tip = d3.select("#cw-tip");
+  function render(xScale) {
+    barsG.selectAll(".cw-bar").data(data, function (d) { return d.i; })
+      .join("rect").attr("class", "cw-bar")
+        .attr("x", function (d) { return xScale(d.t0); })
+        .attr("y", function (d) { return d.i * ROW_H + 6; })
+        .attr("height", ROW_H - 12).attr("rx", 3)
+        .attr("width", function (d) { return Math.max(6, xScale(d.t1) - xScale(d.t0)); })
+        .attr("fill", function (d) { return SEV_COLORS[d.severity] || "#888"; })
+        .attr("opacity", 0.75).style("cursor", "pointer")
+        .on("mouseover", function (event, d) {
+          tip.style("display", "block")
+             .html("<strong>#" + (d.i + 1) + " " + d.chain_type + "</strong><br>" +
+                   d.source_ip + "<br>" + d.severity.toUpperCase() +
+                   " &middot; " + d.event_count + " events");
+          d3.select(this).attr("opacity", 1);
+        })
+        .on("mousemove", function (event) {
+          tip.style("left", (event.offsetX + 14) + "px")
+             .style("top", (event.offsetY - 14) + "px");
+        })
+        .on("mouseout", function () {
+          tip.style("display", "none");
+          d3.select(this).attr("opacity", 0.75);
+        })
+        .on("click", function (_, d) {
+          var el = document.getElementById("inc-" + d.i);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+    barsG.selectAll(".cw-label").data(data, function (d) { return d.i; })
+      .join("text").attr("class", "cw-label")
+        .attr("x", function (d) { return xScale(d.t0) + 7; })
+        .attr("y", function (d) { return d.i * ROW_H + ROW_H / 2 + 4; })
+        .attr("fill", "#e0e0e0").attr("font-size", 10)
+        .attr("font-family", "monospace").attr("pointer-events", "none")
+        .text(function (d) { return "#" + (d.i + 1) + " " + d.chain_type; });
+    styleAxis(xAxisG, xScale);
+  }
+  var zoom = d3.zoom().scaleExtent([1, 50])
+    .on("zoom", function (ev) { render(ev.transform.rescaleX(x0)); });
+  svg.call(zoom);
+  render(x0);
+  document.getElementById("cw-reset").addEventListener("click", function () {
+    svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+  });
+})();
+</script>
+"""
+
+def _incidents_for_timeline(incidents: list[dict]) -> str:
+    data = []
+    for i, inc in enumerate(incidents):
+        data.append({
+            "i": i,
+            "chain_type": inc["chain_type"],
+            "source_ip":  inc["source_ip"],
+            "severity":   inc["severity"],
+            "start":      inc["start_time"].strftime("%Y-%m-%dT%H:%M:%S"),
+            "end":        inc["end_time"].strftime("%Y-%m-%dT%H:%M:%S"),
+            "event_count": len(inc["events"]),
+        })
+    return json.dumps(data)
+
 _HTML_CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 14px;
-       background: #f4f6f9; color: #222; padding: 24px; }
-h1   { font-size: 24px; color: #1a3a5c; margin-bottom: 4px; }
-h2   { font-size: 16px; color: #1a3a5c; margin: 28px 0 10px;
-       border-bottom: 2px solid #1a3a5c; padding-bottom: 4px; }
-.subtitle { color: #555; margin-bottom: 24px; font-size: 13px; }
+body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 14px;
+       background: #050a0f; color: #e0e0e0; padding: 32px; }
+h1   { font-size: 22px; color: #00d4ff; font-family: 'Courier New', monospace;
+       letter-spacing: 2px; margin-bottom: 4px; }
+h2   { font-size: 13px; color: #5a8fa8; font-family: 'Courier New', monospace;
+       letter-spacing: 1px; text-transform: uppercase;
+       margin: 28px 0 12px; border-bottom: 1px solid #1a2a3a; padding-bottom: 6px; }
+.subtitle { color: #5a6b7a; margin-bottom: 24px; font-size: 13px; }
 .summary-box  { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 28px; }
-.summary-card { background: #fff; border-radius: 6px; padding: 14px 20px;
-                box-shadow: 0 1px 4px rgba(0,0,0,0.1); min-width: 120px; text-align: center; }
-.summary-card .number { font-size: 28px; font-weight: 700; }
-.summary-card .label  { font-size: 11px; color: #777; margin-top: 2px;
+.summary-card { background: #0d141b; border: 1px solid #1a2a3a; border-radius: 6px;
+                padding: 14px 20px; min-width: 120px; text-align: center; }
+.summary-card .number { font-size: 28px; font-weight: 700; color: #e0e0e0; }
+.summary-card .label  { font-size: 11px; color: #5a6b7a; margin-top: 2px;
                          text-transform: uppercase; letter-spacing: 0.4px; }
-.num-critical { color: #c0392b; }
-.num-high     { color: #d35400; }
-.num-medium   { color: #1a56b0; }
-.incident-block { background: #fff; border-radius: 8px; padding: 18px 22px;
-                  margin-bottom: 20px; box-shadow: 0 2px 6px rgba(0,0,0,0.07);
-                  border-left: 5px solid #ccc; }
-.incident-block.critical { border-color: #e74c3c; }
-.incident-block.high     { border-color: #e67e22; }
-.incident-block.medium   { border-color: #2980b9; }
-.incident-block.low      { border-color: #27ae60; }
+.num-critical { color: #ff4d4d; }
+.num-high     { color: #ff9800; }
+.num-medium   { color: #2196f3; }
+#cw-controls { margin-bottom: 10px; display: flex; align-items: center; gap: 12px; }
+#cw-reset { background: #0d141b; color: #00d4ff; border: 1px solid #1a2a3a;
+            padding: 4px 12px; cursor: pointer; font-size: 12px; border-radius: 3px; }
+#cw-reset:hover { background: #1a2a3a; }
+#cw-wrap { position: relative; background: #07101a; border: 1px solid #1a2a3a;
+           border-radius: 6px; overflow: hidden; margin-bottom: 30px; }
+#cw-tip  { display: none; position: absolute; background: #0d141b; border: 1px solid #1a2a3a;
+           color: #e0e0e0; font-size: 12px; padding: 8px 12px; border-radius: 4px;
+           pointer-events: none; z-index: 10; line-height: 1.6; }
+.incident-block { background: #0d141b; border-radius: 8px; padding: 18px 22px;
+                  margin-bottom: 16px; border-left: 4px solid #1a2a3a; }
+.incident-block.critical { border-color: #ff4d4d; }
+.incident-block.high     { border-color: #ff9800; }
+.incident-block.medium   { border-color: #2196f3; }
+.incident-block.low      { border-color: #40ffaa; }
 .incident-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 3px;
-         font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
-.badge.critical { background: #fdecea; color: #c0392b; }
-.badge.high     { background: #fef0e6; color: #d35400; }
-.badge.medium   { background: #e8f0fe; color: #1a56b0; }
-.badge.low      { background: #e6f4ea; color: #1e7e34; }
-.chain-type { font-size: 16px; font-weight: 600; color: #1a3a5c; }
-.meta-line  { font-size: 12px; color: #666; margin-bottom: 10px; }
+         font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+         font-family: 'Courier New', monospace; }
+.badge.critical { background: #2a0a0a; color: #ff4d4d; }
+.badge.high     { background: #2a1600; color: #ff9800; }
+.badge.medium   { background: #071828; color: #2196f3; }
+.badge.low      { background: #071f12; color: #40ffaa; }
+.chain-type { font-size: 15px; font-weight: 600; color: #e0e0e0; }
+.meta-line  { font-size: 12px; color: #5a6b7a; margin-bottom: 10px; }
 details { margin-top: 8px; }
-summary { cursor: pointer; font-size: 12px; color: #1a56b0; user-select: none; }
+summary { cursor: pointer; font-size: 12px; color: #00d4ff; user-select: none; }
 summary:hover { text-decoration: underline; }
-.event-list { font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px;
-              margin-top: 8px; background: #f8f9fb; border-radius: 4px;
-              padding: 10px 14px; color: #333; }
-.event-row  { padding: 2px 0; border-bottom: 1px solid #eee; white-space: nowrap; }
+.event-list { font-family: 'Courier New', monospace; font-size: 12px; margin-top: 8px;
+              background: #080f18; border-radius: 4px; padding: 10px 14px; color: #c0c0c0; }
+.event-row  { padding: 3px 0; border-bottom: 1px solid #0d141b; white-space: nowrap; }
 .event-row:last-child { border-bottom: none; }
-.ev-ts   { color: #888; margin-right: 8px; }
-.ev-type { color: #1a3a5c; font-weight: 600; margin-right: 8px; min-width: 160px;
-           display: inline-block; }
-.ev-detail { color: #444; }
-.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-              gap: 20px; margin-bottom: 28px; }
-.stats-panel { background: #fff; border-radius: 8px; padding: 16px 20px;
-               box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-.stats-panel h3 { font-size: 13px; font-weight: 600; color: #1a3a5c;
-                  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.ev-ts     { color: #5a6b7a; margin-right: 10px; }
+.ev-type   { color: #00d4ff; font-weight: 600; margin-right: 10px; min-width: 160px;
+             display: inline-block; }
+.ev-detail { color: #a0b0b0; }
+.stats-grid  { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+               gap: 20px; margin-bottom: 28px; }
+.stats-panel { background: #0d141b; border: 1px solid #1a2a3a; border-radius: 8px; padding: 16px 20px; }
+.stats-panel h3 { font-size: 12px; font-weight: 600; color: #5a8fa8; text-transform: uppercase;
+                  letter-spacing: 0.5px; margin-bottom: 10px; font-family: 'Courier New', monospace; }
 .stat-row { display: flex; align-items: center; gap: 8px;
-            font-size: 12px; padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
+            font-size: 12px; padding: 3px 0; border-bottom: 1px solid #0a1520; }
 .stat-row:last-child { border-bottom: none; }
-.stat-label { color: #333; min-width: 110px; font-family: monospace; }
-.stat-bar-wrap { flex: 1; background: #eef0f4; border-radius: 3px; height: 8px; }
-.stat-bar { background: #1a56b0; border-radius: 3px; height: 8px; }
-.stat-count { color: #666; min-width: 36px; text-align: right; }
+.stat-label { color: #a0b0c0; min-width: 110px; font-family: monospace; }
+.stat-bar-wrap { flex: 1; background: #0a1520; border-radius: 3px; height: 6px; }
+.stat-bar { background: #1a56b0; border-radius: 3px; height: 6px; }
+.stat-count { color: #5a6b7a; min-width: 36px; text-align: right; }
 """
 
 
@@ -1176,6 +1297,10 @@ def _write_html_report(
     for inc in incidents:
         sev_counts[inc["severity"]] += 1
 
+    timeline_js = _CW_TIMELINE_JS.replace(
+        "__INCIDENTS_JSON__", _incidents_for_timeline(incidents)
+    )
+
     parts: list[str] = [f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1207,6 +1332,12 @@ def _write_html_report(
             f'<div class="label">{sev.capitalize()}</div></div>\n'
         )
     parts.append('</div>\n')
+
+    # ── incident timeline ─────────────────────────────────────────────────────
+    parts.append('<h2>Incident Timeline</h2>\n')
+    parts.append('<div id="cw-controls"><button id="cw-reset">Reset Zoom</button></div>\n')
+    parts.append('<div id="cw-wrap"><svg id="cw-svg" style="display:block"></svg>'
+                 '<div id="cw-tip"></div></div>\n')
 
     # ── statistics panels ─────────────────────────────────────────────────────
     if stats["top_ips"] or stats["top_ports"] or stats["hourly"]:
@@ -1268,7 +1399,7 @@ def _write_html_report(
             t_start  = inc["start_time"].strftime("%Y-%m-%d %H:%M:%S")
             t_end    = inc["end_time"].strftime("%H:%M:%S")
 
-            parts.append(f'<div class="incident-block {e(sev)}">\n')
+            parts.append(f'<div class="incident-block {e(sev)}" id="inc-{i - 1}">\n')
             parts.append(
                 f'<div class="incident-header">'
                 f'<span class="badge {e(sev)}">{e(sev.upper())}</span>'
@@ -1289,6 +1420,7 @@ def _write_html_report(
             parts.append('</div></details>\n')
             parts.append('</div>\n')
 
+    parts.append(timeline_js)
     parts.append('</body></html>\n')
 
     with open(path, "w", encoding="utf-8") as fh:
