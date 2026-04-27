@@ -1,4 +1,6 @@
-![chain-watch banner](banner.png)
+<p align="center">
+  <img src="logo.png" alt="chain-watch" width="250">
+</p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/elin-olsson/chain-watch/actions/workflows/ci.yml)
 
@@ -267,9 +269,5 @@ python -m pytest tests/
 ---
 
 <p align="center">
-  <img src="logo.png" alt="chain-watch logo" width="200">
-</p>
-
-<p align="center">
-  <sub>The banner and logo are &copy; 2026 shadowfox.se — all rights reserved, not covered by the MIT license.</sub>
+  <sub>The logo is &copy; 2026 shadowfox.se — all rights reserved, not covered by the MIT license.</sub>
 </p>
