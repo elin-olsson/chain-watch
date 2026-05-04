@@ -88,6 +88,7 @@ sudo python3 chainwatch.py \
 
 | Flag | Description |
 |---|---|
+| `--version` | Print the version number and exit |
 | `--window SECONDS` | Correlation time window in seconds (default: 600) |
 | `--since TIME` | Ignore events before TIME (`HH:MM`, `HH:MM:SS`, or `YYYY-MM-DD HH:MM[:SS]`) |
 | `--until TIME` | Ignore events after TIME (same formats as `--since`) |
