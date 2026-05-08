@@ -71,6 +71,10 @@ sudo python3 chainwatch.py --html report.html
 # Write results to JSON
 sudo python3 chainwatch.py --json report.json
 
+# Filter by minimum severity
+sudo python3 chainwatch.py --level high
+sudo python3 chainwatch.py --journal --level critical
+
 # Specify log files explicitly
 sudo python3 chainwatch.py \
     --auth-log  /var/log/auth.log \
@@ -95,6 +99,7 @@ sudo python3 chainwatch.py \
 | `--journal` | Read from the systemd journal via `journalctl` (merged with file sources) |
 | `--follow` | Watch log files and alert on new incidents in real time |
 | `--interval SECONDS` | Poll interval for `--follow` mode in seconds (default: 5) |
+| `--level SEVERITY` | Only show incidents at or above this severity (`medium`, `high`, `critical`) |
 | `--json FILE` | Write JSON report to FILE |
 | `--html FILE` | Write self-contained HTML report to FILE |
 | `--auth-log FILE` | Explicit path to auth.log / secure |
