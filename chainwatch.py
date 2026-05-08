@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 # ANSI colour codes — applied only when stdout is a real TTY
 _ANSI_RED    = "\033[31m"
@@ -25,6 +25,12 @@ _SEV_COLOUR = {
     "high":     _ANSI_YELLOW,
     "medium":   _ANSI_BLUE,
 }
+
+_SEV_RANK = {"medium": 1, "high": 2, "critical": 3}
+
+
+def _severity_rank(severity: str) -> int:
+    return _SEV_RANK.get(severity.lower(), 0)
 
 
 def _c(text: str, code: str) -> str:
@@ -1498,6 +1504,7 @@ def _follow_mode(
     window_seconds: int,
     poll_interval: int,
     use_journal: bool = False,
+    min_rank: int = 0,
 ) -> None:
     monitored = [
         (auth_path,  "auth"),
@@ -1596,6 +1603,8 @@ def _follow_mode(
                 auth_buf, fw_buf, audit_buf, window_seconds=window_seconds, quiet=True
             )
             for inc in incidents:
+                if _severity_rank(inc["severity"]) < min_rank:
+                    continue
                 key = (inc["chain_type"], inc["source_ip"], inc["start_time"])
                 if key not in seen_incidents:
                     seen_incidents.add(key)
@@ -1656,6 +1665,7 @@ examples:
   sudo chainwatch --follow --interval 10       poll every 10 seconds
   sudo chainwatch --journal                    read from systemd journal
   sudo chainwatch --journal --since 06:00      journal entries since 06:00
+  sudo chainwatch --level high                 show only high and critical incidents
   sudo chainwatch --json out.json              write JSON report
   sudo chainwatch --html report.html           write HTML report
   chainwatch --auth-log auth.log.sample        test with a specific file
@@ -1713,14 +1723,21 @@ examples:
         "--html", metavar="FILE", dest="html_out",
         help="write self-contained HTML report to FILE",
     )
+    parser.add_argument(
+        "--level", metavar="SEVERITY", dest="min_level",
+        choices=["medium", "high", "critical"],
+        help="only show incidents at or above this severity (medium, high, critical)",
+    )
     args = parser.parse_args()
 
     auth_path, ufw_path, audit_path = _resolve_log_paths(
         args.log_dir, args.auth_log, args.ufw_log, args.audit_log,
     )
 
+    min_rank = _severity_rank(args.min_level) if args.min_level else 0
+
     if args.follow:
-        _follow_mode(auth_path, ufw_path, audit_path, args.window, args.interval, args.journal)
+        _follow_mode(auth_path, ufw_path, audit_path, args.window, args.interval, args.journal, min_rank)
         return
 
     print(_c("Parsing logs…", _ANSI_DIM))
@@ -1762,6 +1779,9 @@ examples:
     incidents = correlate_events(
         auth_events, ufw_events, audit_events, window_seconds=args.window,
     )
+
+    if min_rank:
+        incidents = [inc for inc in incidents if _severity_rank(inc["severity"]) >= min_rank]
 
     print()
     _print_terminal_report(incidents, auth_events, ufw_events, audit_events, args.window)
