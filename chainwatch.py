@@ -11,7 +11,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-__version__ = "1.4.0"
+from shadowfox_pdf import PDFReport, RED, ORANGE, BLUE, DEEP_RED, GREY
+
+__version__ = "1.5.0"
 
 # ANSI colour codes — applied only when stdout is a real TTY
 _ANSI_RED    = "\033[31m"
@@ -1073,6 +1075,85 @@ def _write_json_report(
     print(f"JSON report written to {path}")
 
 
+# ── PDF export ────────────────────────────────────────────────────────────────
+
+_PDF_SEV_COLOUR = {
+    "critical": DEEP_RED,
+    "high":     RED,
+    "medium":   ORANGE,
+    "low":      BLUE,
+}
+
+
+def _write_pdf_report(
+    path: str,
+    incidents: list[dict],
+    auth_events: list[dict],
+    ufw_events: list[dict],
+    audit_events: list[dict],
+    window_seconds: int,
+) -> None:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    n_auth, n_ufw, n_aud = len(auth_events), len(ufw_events), len(audit_events)
+    stats = _compute_stats(auth_events, ufw_events, audit_events)
+
+    report = PDFReport("chain-watch", "Attack Chain Correlation Report")
+    report.heading("Attack Chain Correlation Report")
+    report.subheading(f"Generated {now}")
+    report.text(
+        f"Window {window_seconds}s    "
+        f"Parsed {n_auth + n_ufw + n_aud} events ({n_auth} auth, {n_ufw} ufw, {n_aud} audit)    "
+        f"Incidents {len(incidents)}"
+    )
+    report.rule()
+
+    if stats["top_ips"]:
+        report.subheading("Top attacking IPs")
+        max_count = stats["top_ips"][0][1]
+        for ip, count in stats["top_ips"]:
+            report.kv_bar(ip, count, max_count, f"{count} attempts", BLUE)
+        report.spacer(6)
+
+    if stats["top_ports"]:
+        report.subheading("Most targeted ports")
+        max_count = stats["top_ports"][0][2]
+        for port, proto, count in stats["top_ports"]:
+            label = f"{port}/{proto}" if proto else str(port)
+            report.kv_bar(label, count, max_count, f"{count} blocks", ORANGE)
+        report.spacer(6)
+
+    if not incidents:
+        report.rule()
+        report.text("No attack chains detected.", color=GREY)
+        report.save(path)
+        print(f"PDF report written to {path}")
+        return
+
+    report.rule()
+    report.subheading(f"Incidents ({len(incidents)})")
+    for i, inc in enumerate(incidents, 1):
+        sev      = inc["severity"]
+        duration = _fmt_duration(inc["start_time"], inc["end_time"])
+        date_str = inc["start_time"].strftime("%Y-%m-%d")
+        t_start  = inc["start_time"].strftime("%H:%M:%S")
+        t_end    = inc["end_time"].strftime("%H:%M:%S")
+        color = _PDF_SEV_COLOUR.get(sev, GREY)
+
+        report.spacer(4)
+        report.severity_line(
+            sev.upper(), f"#{i}  {inc['chain_type']}", inc["source_ip"], color,
+        )
+        report.text(
+            f"{date_str}  {t_start} -> {t_end}  ({duration})  -  {len(inc['events'])} events",
+            size=8.5, color=GREY, indent=8,
+        )
+        for ev in inc["events"]:
+            report.text(_fmt_event(ev).strip(), size=8.5, mono=True, indent=8)
+
+    report.save(path)
+    print(f"PDF report written to {path}")
+
+
 # ── HTML export ───────────────────────────────────────────────────────────────
 
 _CW_TIMELINE_JS = """
@@ -1669,6 +1750,7 @@ examples:
   sudo chainwatch --level high                 show only high and critical incidents
   sudo chainwatch --json out.json              write JSON report
   sudo chainwatch --html report.html           write HTML report
+  sudo chainwatch --pdf report.pdf             write client-ready PDF report
   chainwatch --auth-log auth.log.sample        test with a specific file
 """,
     )
@@ -1723,6 +1805,10 @@ examples:
     parser.add_argument(
         "--html", metavar="FILE", dest="html_out",
         help="write self-contained HTML report to FILE",
+    )
+    parser.add_argument(
+        "--pdf", metavar="FILE", dest="pdf_out",
+        help="write client-ready PDF report to FILE",
     )
     parser.add_argument(
         "--level", metavar="SEVERITY", dest="min_level",
@@ -1794,6 +1880,10 @@ examples:
     if args.html_out:
         _write_html_report(
             args.html_out, incidents, auth_events, ufw_events, audit_events, args.window,
+        )
+    if args.pdf_out:
+        _write_pdf_report(
+            args.pdf_out, incidents, auth_events, ufw_events, audit_events, args.window,
         )
 
 

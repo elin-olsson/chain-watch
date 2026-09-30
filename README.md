@@ -71,6 +71,9 @@ sudo python3 chainwatch.py --html report.html
 # Write results to JSON
 sudo python3 chainwatch.py --json report.json
 
+# Write a client-ready PDF report
+sudo python3 chainwatch.py --pdf report.pdf
+
 # Filter by minimum severity
 sudo python3 chainwatch.py --level high
 sudo python3 chainwatch.py --journal --level critical
@@ -102,6 +105,7 @@ sudo python3 chainwatch.py \
 | `--level SEVERITY` | Only show incidents at or above this severity (`medium`, `high`, `critical`) |
 | `--json FILE` | Write JSON report to FILE |
 | `--html FILE` | Write self-contained HTML report to FILE |
+| `--pdf FILE` | Write client-ready PDF report to FILE |
 | `--auth-log FILE` | Explicit path to auth.log / secure |
 | `--ufw-log FILE` | Explicit path to firewall log |
 | `--audit-log FILE` | Explicit path to audit/audit.log |
@@ -253,6 +257,16 @@ sudo python3 chainwatch.py --json report.json
 
 Output includes a timestamp, parsed event counts, and an array of incident objects with `chain_type`, `source_ip`, `severity`, `start_time`, `end_time`, `duration_seconds`, and `events` fields.
 
+### PDF report
+
+Use `--pdf <file>` to generate a paginated PDF report suitable for handing to a client after an engagement:
+
+```bash
+sudo python3 chainwatch.py --pdf report.pdf
+```
+
+Includes the same statistics header (top IPs, top ports) and per-incident breakdown as the terminal report. Built with a small dependency-free PDF writer (no LaTeX, no headless browser) so it needs nothing beyond the Python standard library.
+
 ## How it works
 
 Events from each log source are parsed and normalised into typed event dicts with a consistent `timestamp` and `source_ip`. Events are then grouped by source IP across all four sources. For each IP, chain-watch applies a sliding time window: when events from multiple sources cluster within the window, the relevant chain conditions are evaluated in order of severity — a `brute_then_login` supersedes a plain `brute_force` for the same cluster.
@@ -271,6 +285,7 @@ python -m pytest tests/
 | Package | Version | Purpose |
 |---|---|---|
 | `pytest` | ≥ 9.0.3 | Test suite only — not required at runtime |
+| `shadowfox_pdf` | vendored | Dependency-free PDF report writer, bundled in this repo (`shadowfox_pdf.py`) |
 
 ---
 
