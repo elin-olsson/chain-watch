@@ -40,3 +40,22 @@ def test_future_time_today_not_rolled_back():
 def test_november_parsed_in_december_not_rolled_back():
     dt = _parse_timestamp("Nov 30 10:00:00", _today=_today(2026, 12, 1))
     assert dt == datetime(2026, 11, 30, 10, 0, 0)
+
+
+# ── RFC 3339 (rsyslog default on Ubuntu 24.04+ / Debian 12+) ─────────────────
+
+def test_rfc3339_with_offset_converted_to_local_naive():
+    dt = _parse_timestamp("2026-10-04T11:20:57.509549+02:00")
+    expected = datetime.fromisoformat("2026-10-04T11:20:57.509549+02:00").astimezone()
+    assert dt == expected.replace(tzinfo=None)
+    assert dt.tzinfo is None
+
+
+def test_rfc3339_utc_z():
+    dt = _parse_timestamp("2026-10-04T09:20:57Z")
+    expected = datetime.fromisoformat("2026-10-04T09:20:57+00:00").astimezone()
+    assert dt == expected.replace(tzinfo=None)
+
+
+def test_rfc3339_without_offset_kept_as_is():
+    assert _parse_timestamp("2026-10-04T11:20:57") == datetime(2026, 10, 4, 11, 20, 57)
