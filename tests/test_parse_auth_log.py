@@ -130,3 +130,17 @@ def test_mixed_events_all_parsed(tmp_path):
     events = parse_auth_log(f)
     types = [e["event_type"] for e in events]
     assert types == ["failed_login", "failed_login", "successful_login", "sudo_usage"]
+
+
+# ── RFC 3339 timestamps (Ubuntu 24.04+ / Debian 12+) ──────────────────────────
+
+def test_rfc3339_auth_log(tmp_path):
+    f = write_log(tmp_path, """
+        2026-10-04T11:20:50.100000+02:00 host sshd[1020]: Failed password for root from 203.0.113.5 port 54321 ssh2
+        2026-10-04T11:20:57.517472+02:00 host sshd[1020]: Accepted publickey for elin from 192.168.1.10 port 46486 ssh2: ED25519 SHA256:abc
+    """)
+    events = parse_auth_log(f)
+    assert [e["event_type"] for e in events] == ["failed_login", "successful_login"]
+    assert events[1]["user"] == "elin"
+    assert events[1]["source_ip"] == "192.168.1.10"
+    assert events[0]["timestamp"] < events[1]["timestamp"]

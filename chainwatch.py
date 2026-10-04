@@ -13,7 +13,7 @@ from pathlib import Path
 
 from shadowfox_pdf import PDFReport, RED, ORANGE, BLUE, DEEP_RED, GREY
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 # ANSI colour codes — applied only when stdout is a real TTY
 _ANSI_RED    = "\033[31m"
@@ -44,8 +44,12 @@ def _c(text: str, code: str) -> str:
 
 
 # Syslog header: "Apr 20 03:06:34 hostname service[pid]: message"
+# Classic syslog ("Oct  4 11:20:57") or RFC 3339, the rsyslog default on
+# Ubuntu 24.04+ and Debian 12+ ("2026-10-04T11:20:57.509549+02:00").
 _HEADER = re.compile(
-    r'^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+(\S+)\s+([\w()\-]+)(?:\[\d+\])?\s*:\s+(.*)$'
+    r'^(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}'
+    r'|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)'
+    r'\s+(\S+)\s+([\w()\-]+)(?:\[\d+\])?\s*:\s+(.*)$'
 )
 
 # SSH failure: "Failed password for [invalid user] bob from 1.2.3.4 port 22 ssh2"
@@ -178,7 +182,12 @@ def _resolve_user(kv: dict) -> str:
 
 
 def _parse_timestamp(raw: str, _today: datetime | None = None) -> datetime:
-    normalized = re.sub(r'\s+', ' ', raw.strip())
+    raw = raw.strip()
+    if raw[:4].isdigit():
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        # Everything else in chain-watch is naive local time.
+        return dt.astimezone().replace(tzinfo=None) if dt.tzinfo else dt
+    normalized = re.sub(r'\s+', ' ', raw)
     today = _today or datetime.now()
     dt = datetime.strptime(f"{today.year} {normalized}", "%Y %b %d %H:%M:%S")
     # If the parsed date is in the future, the log entry is from the previous year
