@@ -119,6 +119,8 @@ sudo python3 chainwatch.py \
 | auditd | `/var/log/audit/audit.log` | execve syscalls, user additions/deletions, PAM auth events |
 | systemd journal | `journalctl` (via `--journal`) | SSH logins, sudo usage, kernel firewall events |
 
+Both traditional syslog timestamps (`Apr 21 03:12:04`) and RFC 3339 timestamps (the default on Ubuntu 24.04 and later) are supported.
+
 chain-watch automatically searches the default paths when no explicit path is given. All parsers handle missing or unreadable files gracefully — if a log source is not present, that source is silently skipped.
 
 The `--journal` flag reads from the systemd journal using `journalctl` and merges the results with any file-based sources. It is particularly useful on systemd-based distributions (Fedora, Arch, recent Ubuntu) where logs are primarily stored in the journal rather than plain text files. Combine with `--since` to limit the query to a specific time range and avoid reading the full journal history.
@@ -284,7 +286,7 @@ python -m pytest tests/
 
 | Package | Version | Purpose |
 |---|---|---|
-| `pytest` | ≥ 9.0.3 | Test suite only — not required at runtime |
+| `pytest` | ≥ 9.1.1 | Test suite only — not required at runtime |
 | `shadowfox_pdf` | vendored | Dependency-free PDF report writer, bundled in this repo (`shadowfox_pdf.py`) |
 
 ---
